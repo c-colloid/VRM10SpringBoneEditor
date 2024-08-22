@@ -1,0 +1,15 @@
+fileFormatVersion: 2
+guid: 3713a773b0a40e442b8478f4455b75dd
+MonoImporter:
+  externalObjects: {}
+  serializedVersion: 2
+  defaultReferences:
+  - m_springBoneExUI: {fileID: 9197481963319205126, guid: 513d600b93ba1304e8347be91dd549e0,
+      type: 3}
+  - m_springBoneExColliderGroupsList: {fileID: 9197481963319205126, guid: e1ce3a43555952b47b50c0fe89b56c37,
+      type: 3}
+  executionOrder: 0
+  icon: {instanceID: 0}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 

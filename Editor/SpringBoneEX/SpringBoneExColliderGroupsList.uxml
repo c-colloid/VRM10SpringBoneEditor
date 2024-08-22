@@ -1,0 +1,5 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
+    <uie:ObjectField label="Group" type="UniVRM10.VRM10SpringBoneColliderGroup, VRM10" name="Group" />
+    <ui:TextField picking-mode="Ignore" label="Name" is-delayed="false" readonly="false" name="GroupName" />
+    <ui:ListView name="Colliders" header-title="Colliders" show-foldout-header="true" show-add-remove-footer="true" show-border="true" reorder-mode="Animated" reorderable="true" />
+</ui:UXML>

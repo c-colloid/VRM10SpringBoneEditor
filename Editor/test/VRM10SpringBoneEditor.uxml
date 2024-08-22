@@ -1,0 +1,29 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
+    <Style src="project://database/Assets/VRM10SpringBoneEditor/Editor/VRM10SpringBoneEditor.uss?fileID=7433441132597879392&amp;guid=61e2b9b18f92dc04ebb597ebc2937854&amp;type=3#VRM10SpringBoneEditor" />
+    <ui:TextField picking-mode="Ignore" label="Comment" name="Comment" multiline="true" />
+    <uie:ColorField label="Gizmo Color" name="GizmoColor" value="#FFEB04FF" />
+    <ui:Label tabindex="-1" parse-escape-sequences="true" display-tooltip-when-elided="true" style="display: none;" />
+    <ui:VisualElement name="Settings" style="margin-top: 10px; border-left-color: rgb(77, 77, 77); border-right-color: rgb(77, 77, 77); border-top-color: rgb(77, 77, 77); border-bottom-color: rgb(77, 77, 77); border-left-width: 0; border-right-width: 0; border-top-width: 2px; border-bottom-width: 0; flex-shrink: 0;">
+        <ui:Label tabindex="-1" text="Settings" parse-escape-sequences="true" display-tooltip-when-elided="true" name="SettingsLabel" class="separater" />
+        <ui:VisualElement name="StiffnessForce" focusable="true" picking-mode="Ignore" style="flex-direction: row;">
+            <ui:VisualElement style="flex-basis: 100%;">
+                <ui:Slider value="1" high-value="4" show-input-field="true" name="StiffnessForce" label="Stiffness Force">
+                    <CustomUI.ToggleButton text="C" parse-escape-sequences="true" display-tooltip-when-elided="true" />
+                </ui:Slider>
+                <uie:CurveField name="StiffnessForce" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+        <ui:Slider picking-mode="Ignore" label="Gravity Power" value="0" high-value="2" show-input-field="true" name="GravityPower" />
+        <ui:Vector3Field label="Gravity Dir" name="GravityDir" y="-1" />
+        <ui:Slider picking-mode="Ignore" label="Drag Force" value="0.4" high-value="1" name="DragForce" show-input-field="true" />
+        <uie:ObjectField label="Center" type="UnityEngine.Transform, UnityEngine.CoreModule" name="Center" />
+        <ui:ListView focusable="true" show-foldout-header="true" show-add-remove-footer="true" header-title="Root Bones" name="RootBones" reorderable="true" show-border="true" reorder-mode="Animated" selection-type="Multiple" />
+    </ui:VisualElement>
+    <ui:Label tabindex="-1" parse-escape-sequences="true" display-tooltip-when-elided="true" style="display: none;" />
+    <ui:VisualElement name="Collision" style="margin-top: 10px; border-top-width: 2px; border-left-color: rgb(77, 77, 77); border-right-color: rgb(77, 77, 77); border-top-color: rgb(77, 77, 77); border-bottom-color: rgb(77, 77, 77); flex-shrink: 0;">
+        <ui:Label tabindex="-1" text="Collision" parse-escape-sequences="true" display-tooltip-when-elided="true" name="CollisionLabel" class="separater" />
+        <ui:Slider picking-mode="Ignore" label="Hit Radius" value="0.02" high-value="0.5" name="HitRadius" show-input-field="true" />
+        <ui:ListView focusable="true" reorderable="false" show-foldout-header="true" show-add-remove-footer="true" reorder-mode="Animated" show-border="true" header-title="Collider Groups" name="ColliderGroups" show-bound-collection-size="true" virtualization-method="DynamicHeight" binding-path="ColliderGroupsList" selection-type="Multiple" style="--unity-item-height: 32;" />
+        <ui:EnumField label="Update Type" type="UniVRM10.Vrm10Instance+UpdateTypes, VRM10" name="UpdateType" />
+    </ui:VisualElement>
+</ui:UXML>

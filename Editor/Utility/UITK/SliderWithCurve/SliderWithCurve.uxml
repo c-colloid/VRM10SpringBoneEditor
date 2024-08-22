@@ -1,0 +1,4 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
+    <CustomUI.SliderWithCurve label="Slider with Curve" show-input-field="true" button-text="X" button-value="true" style="align-items: center;" />
+    <CustomUI.SliderWithCurve label="Slider" />
+</ui:UXML>

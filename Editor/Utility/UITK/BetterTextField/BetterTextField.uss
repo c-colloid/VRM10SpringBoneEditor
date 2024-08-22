@@ -1,0 +1,22 @@
+.unity-better-text-field__placeholder {
+    position: absolute;
+    margin: 0;
+    padding: 2px 3px 3px;
+    color: rgba(0, 0, 0, 0.2);
+}
+
+.dark .unity-better-text-field__placeholder {
+    color: var(--dark-placeholder-text-color);
+}
+
+.light .unity-better-text-field__placeholder {
+    color: var(--light-placeholder-text-color);
+}
+
+.unity-better-text-field #unity-text-input {
+    overflow: hidden;
+}
+
+.hidden {
+    visibility: hidden;
+}

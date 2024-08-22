@@ -1,0 +1,42 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
+    <ui:TextField picking-mode="Ignore" label="Name" binding-path="m_name" name="SpringName" />
+    <uie:ObjectField label="Target" type="UniVRM10.VRM10SpringBoneJoint, VRM10" binding-path="m_target" name="Target" />
+    <ui:ListView header-title="ColliderGroups" show-foldout-header="true" show-add-remove-footer="true" show-border="true" binding-path="m_colliderGroups" virtualization-method="DynamicHeight" reorder-mode="Animated" reorderable="true" name="ColliderGroups" style="margin-top: 5px; margin-right: 5px; margin-bottom: 5px; margin-left: 5px;" />
+    <ui:Toggle label="DrawColliders" binding-path="m_drawColliders" name="DrawColliders" style="margin-top: 5px; margin-right: 5px; margin-bottom: 5px; margin-left: 5px; padding-left: 1px;" />
+    <ui:GroupBox name="StiffnessForce" style="margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0;">
+        <ui:Slider label="Stiffness Force" high-value="4" show-input-field="true" binding-path="m_stiffnessForce" name="StiffnessForce">
+            <ui:Button text="C" parse-escape-sequences="true" display-tooltip-when-elided="true" name="StiffnessForce" />
+        </ui:Slider>
+        <uie:CurveField name="StiffnessForce" style="display: none;" />
+    </ui:GroupBox>
+    <ui:GroupBox name="GravityPower" style="margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0;">
+        <ui:Slider label="Gravity Power" high-value="2" show-input-field="true" binding-path="m_gravityPower" name="GravityPower">
+            <ui:Button text="C" parse-escape-sequences="true" display-tooltip-when-elided="true" name="GravityPower" />
+        </ui:Slider>
+        <uie:CurveField name="GravityPower" style="display: none;" />
+    </ui:GroupBox>
+    <ui:GroupBox name="GravityDir" style="align-items: stretch; justify-content: space-between; flex-direction: row; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0;">
+        <ui:Label tabindex="-1" text="Gravity Dir" parse-escape-sequences="true" display-tooltip-when-elided="true" name="GravityDir" style="min-width: 120px;" />
+        <ui:Vector3Field y="-1" binding-path="m_gravityDir" name="GravityDir" style="flex-direction: column; flex-grow: 1;">
+            <ui:GroupBox name="GravityDirXYZ" style="flex-direction: row; display: none; margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0;">
+                <uie:CurveField name="GravityDirX" style="flex-grow: 1;" />
+                <uie:CurveField name="GravityDirY" style="flex-grow: 1;" />
+                <uie:CurveField name="GravityDirZ" style="flex-grow: 1;" />
+            </ui:GroupBox>
+        </ui:Vector3Field>
+        <ui:Button text="C" parse-escape-sequences="true" display-tooltip-when-elided="true" name="GravityDir" style="height: 18px; margin-right: 1px; margin-left: 5px;" />
+    </ui:GroupBox>
+    <ui:GroupBox name="DragForce" style="margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0;">
+        <ui:Slider label="Drag Force" high-value="1" show-input-field="true" binding-path="m_dragForce" name="DragForce">
+            <ui:Button text="C" parse-escape-sequences="true" display-tooltip-when-elided="true" name="DragForce" />
+        </ui:Slider>
+        <uie:CurveField name="DragForce" style="display: none;" />
+    </ui:GroupBox>
+    <ui:GroupBox name="JointRadius" style="margin-top: 0; margin-right: 0; margin-bottom: 0; margin-left: 0;">
+        <ui:Slider label="Joint Radius" high-value="0.5" show-input-field="true" binding-path="m_jointRadius" name="JointRadius">
+            <ui:Button text="C" parse-escape-sequences="true" display-tooltip-when-elided="true" name="JointRadius" />
+        </ui:Slider>
+        <uie:CurveField name="JointRadius" style="display: none;" />
+    </ui:GroupBox>
+    <uie:ObjectField label="Center" type="UnityEngine.Transform, UnityEngine.CoreModule" name="Center" />
+</ui:UXML>

@@ -1,0 +1,15 @@
+.separater {
+    -unity-font-style: bold;
+}
+
+.unity-foldout__text {
+    -unity-font-style: bold;
+}
+
+#StiffnessForce {
+    --Curve-display: none;
+}
+
+.unity-curve-field {
+    display: var(--Curve-display);
+}
