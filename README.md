@@ -1,3 +1,9 @@
+![GitHub release (latest by date)](https://img.shields.io/github/v/release/c-colloid/VRM10SpringBoneEditor?label=release)
+![GitHub release (by tag)](https://img.shields.io/github/downloads/c-colloid/VRM10SpringBoneEditor/latest/total)
+![GitHub all releases](https://img.shields.io/github/downloads/c-colloid/VRM10SpringBoneEditor/total?label=total%20downloads)
+![GitHub issues](https://img.shields.io/github/issues/c-colloid/VRM10SpringBoneEditor)
+![Github stars](https://img.shields.io/github/stars/c-colloid/VRM10SpringBoneEditor)
+
 # VRM10SpringBoneEditor
  VRM10SpringBonesの設定を簡易化する拡張機能。
  
