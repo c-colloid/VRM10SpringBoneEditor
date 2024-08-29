@@ -198,6 +198,8 @@ namespace colloid.VRM10Ex
 						instance.Spring.Joints.ForEach(o => typeof(VRM10SpringBoneJoint).GetField(fieldname).SetValue(o,evt.newValue));
 						Curve.SetValueWithoutNotify(new AnimationCurve(new Keyframe[]{new Keyframe(){value = evt.newValue},new Keyframe(){time = 1,value = evt.newValue}}));
 					}
+					
+					m_VRM10Instance.Runtime.ReconstructSpringBone();
 				});
 				Curve.RegisterValueChangedCallback(evt => {
 					instance.Spring.Joints.Select((obj,index) => (obj,index)).ToList()
@@ -205,6 +207,8 @@ namespace colloid.VRM10Ex
 						.SetValue(o.obj,
 						evt.newValue.Evaluate((float)o.index / (instance.Spring.Joints.Count - 2))));
 					Slider.SetValueWithoutNotify(evt.newValue.Evaluate(0));
+					
+					m_VRM10Instance.Runtime.ReconstructSpringBone();
 				});
 			}
 			void SetVector3GroupBoxRegister(string name, string propatyname, string fieldname, VRM10SpringBoneEx instance)
