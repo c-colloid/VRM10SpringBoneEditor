@@ -127,7 +127,9 @@ namespace colloid.VRM10Ex
 			}
 			InitJointIndex();
 			var targetJoint = m_target;
+			#if VRM_125_TO_131
 			m_drawColliders = targetJoint.m_drawCollider;
+			#endif
 			m_stiffnessForce = targetJoint.m_stiffnessForce;
 			m_gravityPower = targetJoint.m_gravityPower;
 			m_gravityDir = targetJoint.m_gravityDir;
@@ -161,25 +163,33 @@ namespace colloid.VRM10Ex
 		{
 			m_vrm10.SpringBone.Springs.RemoveAt(m_springIndex);
 		}
-		
 		private void OnDrawGizmosSelected()
 		{
 			var vrm = GetComponentInParent<Vrm10Instance>();
+			
 			if (vrm != null)
 			{
 				var found = vrm.SpringBone.FindJoint(m_target);
 				if (found.HasValue)
 				{
-					var (spring, i) = found.Value;
 					// Spring の房全体を描画する
+					#if VRM_125_TO_131
+					var (spring, i) = found.Value;
 					spring.RequestDrawGizmos(m_drawColliders);
+					#endif
+					#if VRM_131_OR_LATER
+					var (spring, i, j) = found.Value;
+					spring.DrawGizmos();
+					spring.Joints.ForEach(joint => Gizmos.DrawWireSphere(joint.transform.position,joint.m_jointRadius));
+					#endif
 					return;
 				}
 			}
+			
 
 			// Spring から参照されていない孤立した Joint
 			Gizmos.color = new Color(1, 0.75f, 0f);
-			Gizmos.DrawSphere(transform.position, m_jointRadius);
+			Gizmos.DrawSphere(m_target.transform.position, m_jointRadius);
 		}
 		
 		public void CreateChildrenJoints()

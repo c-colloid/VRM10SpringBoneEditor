@@ -131,7 +131,9 @@ namespace colloid.VRM10Ex
 			};
 			
 			root.Q<Toggle>("DrawColliders").RegisterValueChangedCallback(evt => {
+				#if VRM_125_TO_131
 				m_instances.ToList().ForEach(o => o.Spring.Joints.ForEach(o => o.m_drawCollider = evt.newValue));
+				#endif
 			});
 
 			void SetSliderGroupBoxRegister(string name, string propatyname, string fieldname, VRM10SpringBoneEx instance)
