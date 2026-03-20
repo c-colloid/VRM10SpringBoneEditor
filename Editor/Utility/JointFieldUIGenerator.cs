@@ -18,15 +18,26 @@ namespace colloid.VRM10Ex.Utility
 	public static class JointFieldUIGenerator
 	{
 		/// <summary>
-		/// Joint の全フィールドを走査し、型推論でマルチJoint対応UIを生成。
+		/// Undo/Redo リフレッシュ用にUI要素へタグ付けするデータ。
 		/// </summary>
-		public static void GenerateUI(
+		class FieldTag
+		{
+			public FieldInfo Field;
+			public List<VRM10SpringBoneJoint> Joints;
+			public FieldOverride Override;
+		}
+
+		/// <summary>
+		/// Joint の全フィールドを走査し、型推論でマルチJoint対応UIを生成。
+		/// 戻り値は Undo/Redo 時に全UI値を再読み込みするリフレッシュ Action。
+		/// </summary>
+		public static Action GenerateUI(
 			VisualElement container,
 			List<VRM10SpringBoneJoint> allJoints,
 			VRM10SpringBoneEx springBoneEx,
 			Action onValueChanged)
 		{
-			if (allJoints == null || allJoints.Count == 0 || allJoints[0] == null) return;
+			if (allJoints == null || allJoints.Count == 0 || allJoints[0] == null) return null;
 
 			var jointType = typeof(VRM10SpringBoneJoint);
 			var fields = jointType
@@ -88,7 +99,6 @@ namespace colloid.VRM10Ex.Utility
 				var displayName = over?.DisplayName
 					?? FieldRegistry.AutoDisplayName(fieldInfo.Name);
 
-				// SerializedObject なしで型推論
 				var element = CreateFieldUI(
 					fieldInfo, displayName, over, allJoints,
 					springBoneEx, onValueChanged);
@@ -105,6 +115,49 @@ namespace colloid.VRM10Ex.Utility
 
 			// AngleLimit の条件表示ロジック
 			SetupAngleLimitVisibility(allJoints, angleLimitFields, onValueChanged);
+
+			return () => RefreshAll(container, allJoints);
+		}
+
+		// ─── Undo/Redo 一括リフレッシュ ───
+
+		/// <summary>
+		/// container 配下の FieldTag 付き要素を走査し、Joint の現在値でUIを更新。
+		/// </summary>
+		static void RefreshAll(VisualElement container, List<VRM10SpringBoneJoint> joints)
+		{
+			if (joints == null || joints.Count == 0 || joints[0] == null) return;
+
+			container.Query<VisualElement>().ForEach(e =>
+			{
+				if (e.userData is not FieldTag tag) return;
+				var value = tag.Field.GetValue(tag.Joints[0]);
+
+				switch (e)
+				{
+					case SliderWithCurve slider:
+						slider.SetValueWithoutNotify((float)value);
+						var (min, max) = FieldRegistry.GetSliderRange(tag.Field, tag.Override);
+						InitializeCurve(slider.Q<CurveField>(), tag.Field, tag.Joints, min, max);
+						break;
+					case EnumField enumField:
+						enumField.SetValueWithoutNotify((Enum)value);
+						break;
+					case Toggle toggle:
+						toggle.SetValueWithoutNotify((bool)value);
+						break;
+					case IntegerField intField:
+						intField.SetValueWithoutNotify((int)value);
+						break;
+					case Vector4Field v4Field:
+						var q = (Quaternion)value;
+						v4Field.SetValueWithoutNotify(new Vector4(q.x, q.y, q.z, q.w));
+						break;
+					case Vector3Field v3Field:
+						v3Field.SetValueWithoutNotify((Vector3)value);
+						break;
+				}
+			});
 		}
 
 		static VisualElement CreateFieldUI(
@@ -113,24 +166,25 @@ namespace colloid.VRM10Ex.Utility
 			Action onChanged)
 		{
 			var fieldType = fieldInfo.FieldType;
+			var tag = new FieldTag { Field = fieldInfo, Joints = joints, Override = over };
 
 			if (fieldType == typeof(float))
-				return CreateSliderWithCurve(fieldInfo, displayName, over, joints, ex, onChanged);
+				return CreateSliderWithCurve(fieldInfo, displayName, over, joints, ex, onChanged, tag);
 
 			if (fieldType == typeof(Vector3))
-				return CreateVector3WithCurve(fieldInfo, displayName, joints, ex, onChanged);
+				return CreateVector3WithCurve(fieldInfo, displayName, joints, ex, onChanged, tag);
 
 			if (fieldType.IsEnum)
-				return CreateEnumField(fieldInfo, displayName, joints, onChanged);
+				return CreateEnumField(fieldInfo, displayName, joints, onChanged, tag);
 
 			if (fieldType == typeof(bool))
-				return CreateToggle(fieldInfo, displayName, joints, onChanged);
+				return CreateToggle(fieldInfo, displayName, joints, onChanged, tag);
 
 			if (fieldType == typeof(int))
-				return CreateIntField(fieldInfo, displayName, joints, onChanged);
+				return CreateIntField(fieldInfo, displayName, joints, onChanged, tag);
 
 			if (fieldType == typeof(Quaternion))
-				return CreateQuaternionField(fieldInfo, displayName, joints, onChanged);
+				return CreateQuaternionField(fieldInfo, displayName, joints, onChanged, tag);
 
 			return CreateDefaultField(fieldInfo, displayName, joints, onChanged);
 		}
@@ -139,7 +193,7 @@ namespace colloid.VRM10Ex.Utility
 		static VisualElement CreateSliderWithCurve(
 			FieldInfo field, string label, FieldOverride over,
 			List<VRM10SpringBoneJoint> joints, VRM10SpringBoneEx ex,
-			Action onChanged)
+			Action onChanged, FieldTag tag)
 		{
 			var (min, max) = FieldRegistry.GetSliderRange(field, over);
 			var slider = new SliderWithCurve();
@@ -147,6 +201,7 @@ namespace colloid.VRM10Ex.Utility
 			slider.lowValue = min;
 			slider.highValue = max;
 			slider.showInputField = true;
+			slider.userData = tag;
 
 			// 初期値
 			var currentValue = (float)field.GetValue(joints[0]);
@@ -259,7 +314,7 @@ namespace colloid.VRM10Ex.Utility
 		static VisualElement CreateVector3WithCurve(
 			FieldInfo field, string label,
 			List<VRM10SpringBoneJoint> joints, VRM10SpringBoneEx ex,
-			Action onChanged)
+			Action onChanged, FieldTag tag)
 		{
 			var groupBox = new GroupBox();
 			groupBox.style.marginTop = 0;
@@ -277,6 +332,7 @@ namespace colloid.VRM10Ex.Utility
 			vector3Field.SetValueWithoutNotify(currentValue);
 			vector3Field.style.flexDirection = FlexDirection.Column;
 			vector3Field.style.flexGrow = 1;
+			vector3Field.userData = tag;
 
 			// カーブボックス
 			var curveBox = new GroupBox();
@@ -343,10 +399,11 @@ namespace colloid.VRM10Ex.Utility
 		// ─── enum → EnumField (全 Joint 同値適用) ───
 		static VisualElement CreateEnumField(
 			FieldInfo field, string label,
-			List<VRM10SpringBoneJoint> joints, Action onChanged)
+			List<VRM10SpringBoneJoint> joints, Action onChanged, FieldTag tag)
 		{
 			var currentValue = field.GetValue(joints[0]);
 			var enumField = new EnumField(label, (Enum)currentValue);
+			enumField.userData = tag;
 			enumField.RegisterValueChangedCallback(evt =>
 			{
 				SetFieldWithUndo(joints, field, evt.newValue);
@@ -358,13 +415,14 @@ namespace colloid.VRM10Ex.Utility
 		// ─── bool → Toggle (全 Joint 同値適用) ───
 		static VisualElement CreateToggle(
 			FieldInfo field, string label,
-			List<VRM10SpringBoneJoint> joints, Action onChanged)
+			List<VRM10SpringBoneJoint> joints, Action onChanged, FieldTag tag)
 		{
 			var currentValue = (bool)field.GetValue(joints[0]);
 			var toggle = new Toggle(label);
 			toggle.SetValueWithoutNotify(currentValue);
 			toggle.style.marginTop = 5;
 			toggle.style.marginBottom = 5;
+			toggle.userData = tag;
 			toggle.RegisterValueChangedCallback(evt =>
 			{
 				SetFieldWithUndo(joints, field, evt.newValue);
@@ -376,11 +434,12 @@ namespace colloid.VRM10Ex.Utility
 		// ─── int → IntegerField (全 Joint 同値適用) ───
 		static VisualElement CreateIntField(
 			FieldInfo field, string label,
-			List<VRM10SpringBoneJoint> joints, Action onChanged)
+			List<VRM10SpringBoneJoint> joints, Action onChanged, FieldTag tag)
 		{
 			var currentValue = (int)field.GetValue(joints[0]);
 			var intField = new IntegerField(label);
 			intField.SetValueWithoutNotify(currentValue);
+			intField.userData = tag;
 			intField.RegisterValueChangedCallback(evt =>
 			{
 				SetFieldWithUndo(joints, field, evt.newValue);
@@ -392,11 +451,12 @@ namespace colloid.VRM10Ex.Utility
 		// ─── Quaternion → Vector4Field 表現 (全 Joint 同値適用) ───
 		static VisualElement CreateQuaternionField(
 			FieldInfo field, string label,
-			List<VRM10SpringBoneJoint> joints, Action onChanged)
+			List<VRM10SpringBoneJoint> joints, Action onChanged, FieldTag tag)
 		{
 			var q = (Quaternion)field.GetValue(joints[0]);
 			var v4Field = new Vector4Field(label);
 			v4Field.SetValueWithoutNotify(new Vector4(q.x, q.y, q.z, q.w));
+			v4Field.userData = tag;
 			v4Field.RegisterValueChangedCallback(evt =>
 			{
 				var newQ = new Quaternion(evt.newValue.x, evt.newValue.y, evt.newValue.z, evt.newValue.w);

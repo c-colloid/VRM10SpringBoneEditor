@@ -27,6 +27,9 @@ namespace colloid.VRM10Ex
 		VRM10SpringBoneEx[] m_instances;
 		string[] m_springs;
 
+		// Undo/Redo でUI値を再読み込みするコールバック
+		Action m_refreshUI;
+
 		// SerializedObjectキャッシュ（bindItem内でのリーク防止）
 		readonly Dictionary<UnityEngine.Object, SerializedObject> m_serializedObjectCache = new Dictionary<UnityEngine.Object, SerializedObject>();
 
@@ -56,10 +59,12 @@ namespace colloid.VRM10Ex
 			var ex = this.target as VRM10SpringBoneEx;
 			if (ex != null) ex.Init();
 			Init();
+			Undo.undoRedoPerformed += OnUndoRedo;
 		}
 
 		protected void OnDestroy()
 		{
+			Undo.undoRedoPerformed -= OnUndoRedo;
 			m_VRMInstance?.Dispose();
 			DisposeSerializedObjectCache();
 
@@ -67,6 +72,12 @@ namespace colloid.VRM10Ex
 			if (m_VRM10Instance == null) return;
 
 			m_instance?.DestroyImmediate();
+		}
+
+		void OnUndoRedo()
+		{
+			m_refreshUI?.Invoke();
+			SceneView.RepaintAll();
 		}
 
 		void OnSceneGUI()
@@ -194,7 +205,7 @@ namespace colloid.VRM10Ex
 			{
 				foreach (var instance in m_instances)
 				{
-					JointFieldUIGenerator.GenerateUI(
+					m_refreshUI = JointFieldUIGenerator.GenerateUI(
 						container,
 						instance.Spring.Joints,
 						instance,
