@@ -287,13 +287,13 @@ namespace colloid.VRM10Ex
 			
 			m_VRMInstance = new SerializedObject(m_VRM10Instance);
 			m_spring = $"SpringBone.Springs.Array.data[{m_instance.SpringIndex}]";
-			Debug.Log(m_spring);
+			//Debug.Log(m_spring);
 			m_instances = this.targets.ToList().Select(o => o as VRM10SpringBoneEx).ToArray();
 			m_springs = m_instances.ToList().Select(o => $"SpringBone.Springs.Array.data[{o.SpringIndex}]").ToArray();
 			m_instances.ToList().ForEach(o => {
 				var instance = o as VRM10SpringBoneEx;
 				var spring = $"SpringBone.Springs.Array.data[{instance.SpringIndex}]";
-				Debug.Log(spring);
+				//Debug.Log(spring);
 			});
 			
 			//Debug.Log(targetVRM);

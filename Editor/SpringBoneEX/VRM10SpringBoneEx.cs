@@ -176,11 +176,21 @@ namespace colloid.VRM10Ex
 					#if VRM_125_TO_131
 					var (spring, i) = found.Value;
 					spring.RequestDrawGizmos(m_drawColliders);
-					#endif
-					#if VRM_131_OR_LATER
+					#else
 					var (spring, i, j) = found.Value;
 					spring.DrawGizmos();
-					spring.Joints.ForEach(joint => Gizmos.DrawWireSphere(joint.transform.position,joint.m_jointRadius));
+					//spring.Joints.ForEach(joint => Gizmos.DrawWireSphere(joint.transform.position,joint.m_jointRadius));
+					Gizmos.DrawSphere(m_target.transform.position, 0.01f);
+					for (int k = 0; k < spring.Joints.Count; k++) {
+						if(k < spring.Joints.Count -1)
+						{
+							Matrix4x4 m = default;
+							m.SetTRS(spring.Joints[k+1].transform.position, spring.Joints[k+1].transform.rotation, Vector3.one);
+							Gizmos.matrix = m;
+							
+							Gizmos.DrawWireSphere(Vector3.zero,spring.Joints[k].m_jointRadius);
+						}
+					}
 					#endif
 					return;
 				}
