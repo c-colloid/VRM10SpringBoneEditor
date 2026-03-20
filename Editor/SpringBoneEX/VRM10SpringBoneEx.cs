@@ -95,6 +95,7 @@ namespace colloid.VRM10Ex
 				if (m_spring != null && targetVRM.SpringBone.Springs.Select(o => o.Name).Contains(m_name))
 				{
 					m_spring = targetVRM.SpringBone.Springs.Where(o => o.Joints.Count <= 0 || o.Joints[0] == null).ToList().Find(o => o.Name == m_name);
+					if (m_spring == null) return;
 					m_springIndex = targetVRM.SpringBone.Springs.IndexOf(m_spring);
 					//m_name = m_spring?.Name;
 					return;
@@ -149,7 +150,7 @@ namespace colloid.VRM10Ex
 			}
 			else if (string.IsNullOrEmpty(m_name))
 			{
-				m_spring = targetVRM.SpringBone.Springs.Find(o => o.Joints[0] == m_target);
+				m_spring = targetVRM.SpringBone.Springs.Find(o => o.Joints.Count > 0 && o.Joints[0] == m_target);
 				m_name = m_spring?.Name;
 			}
 			else

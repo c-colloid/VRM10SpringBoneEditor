@@ -31,6 +31,26 @@ namespace colloid.VRM10Ex
 			m_gravitySlider,
 			m_dragSlider,
 			m_radiusSlider;
+
+		// SerializedObjectキャッシュ（bindItem内でのリーク防止）
+		readonly Dictionary<UnityEngine.Object, SerializedObject> m_serializedObjectCache = new Dictionary<UnityEngine.Object, SerializedObject>();
+
+		SerializedObject GetOrCreateSerializedObject(UnityEngine.Object obj)
+		{
+			if (!m_serializedObjectCache.TryGetValue(obj, out var so) || so == null)
+			{
+				so = new SerializedObject(obj);
+				m_serializedObjectCache[obj] = so;
+			}
+			return so;
+		}
+
+		void DisposeSerializedObjectCache()
+		{
+			foreach (var so in m_serializedObjectCache.Values)
+				so?.Dispose();
+			m_serializedObjectCache.Clear();
+		}
 		
 		// This function is called when the object is loaded.
 		protected void OnEnable() {
@@ -44,9 +64,11 @@ namespace colloid.VRM10Ex
 		
 		// This function is called when the scriptable object will be destroyed.
 		protected void OnDestroy() {
-			//(this.target as VRM10SpringBoneEx).DestroyImmediate();
+			m_VRMInstance?.Dispose();
+
 			if (this.target != null) return;
-			
+			if (m_instance == null || m_VRM10Instance == null) return;
+
 			m_instance.DestroyImmediate();
 		}
 		
@@ -208,7 +230,7 @@ namespace colloid.VRM10Ex
 					instance.Spring.Joints.Select((obj,index) => (obj,index)).ToList()
 						.ForEach(o => typeof(VRM10SpringBoneJoint).GetField(fieldname)
 						.SetValue(o.obj,
-						evt.newValue.Evaluate((float)o.index / (instance.Spring.Joints.Count - 2))));
+						evt.newValue.Evaluate((float)o.index / Math.Max(instance.Spring.Joints.Count - 2, 1))));
 					Slider.SetValueWithoutNotify(evt.newValue.Evaluate(0));
 					
 					if (EditorApplication.isPlaying)
