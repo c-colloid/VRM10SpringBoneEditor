@@ -1,7 +1,5 @@
 ﻿using System;
 using JetBrains.Annotations;
-using Unity.Cloud.Collaborate.Assets;
-//using Unity.Cloud.Collaborate.UserInterface;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
