@@ -123,8 +123,6 @@ namespace colloid.VRM10Ex
 				m_targetTransform = m_target.transform;
 						
 				m_colliderGroups = targetSpring.ColliderGroups;
-					
-				Debug.Log("Init VRM10SpringBoneEx");
 			}
 			InitJointIndex();
 			var targetJoint = m_target;
@@ -166,8 +164,10 @@ namespace colloid.VRM10Ex
 		}
 		private void OnDrawGizmosSelected()
 		{
+			if (m_target == null) return;
+
 			var vrm = GetComponentInParent<Vrm10Instance>();
-			
+
 			if (vrm != null)
 			{
 				var found = vrm.SpringBone.FindJoint(m_target);
@@ -180,7 +180,6 @@ namespace colloid.VRM10Ex
 					#else
 					var (spring, i, j) = found.Value;
 					spring.DrawGizmos();
-					//spring.Joints.ForEach(joint => Gizmos.DrawWireSphere(joint.transform.position,joint.m_jointRadius));
 					Gizmos.DrawSphere(m_target.transform.position, 0.01f);
 					for (int k = 0; k < spring.Joints.Count; k++) {
 						if(k < spring.Joints.Count -1)
@@ -188,7 +187,7 @@ namespace colloid.VRM10Ex
 							Matrix4x4 m = default;
 							m.SetTRS(spring.Joints[k+1].transform.position, spring.Joints[k+1].transform.rotation, Vector3.one);
 							Gizmos.matrix = m;
-							
+
 							Gizmos.DrawWireSphere(Vector3.zero,spring.Joints[k].m_jointRadius);
 						}
 					}
@@ -196,7 +195,6 @@ namespace colloid.VRM10Ex
 					return;
 				}
 			}
-			
 
 			// Spring から参照されていない孤立した Joint
 			Gizmos.color = new Color(1, 0.75f, 0f);

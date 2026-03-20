@@ -65,6 +65,7 @@ namespace colloid.VRM10Ex
 		// This function is called when the scriptable object will be destroyed.
 		protected void OnDestroy() {
 			m_VRMInstance?.Dispose();
+			DisposeSerializedObjectCache();
 
 			if (this.target != null) return;
 			if (m_instance == null || m_VRM10Instance == null) return;
@@ -128,9 +129,9 @@ namespace colloid.VRM10Ex
 						return;
 					}
 					
-					ve.Q<TextField>().BindProperty(new SerializedObject(evt.newValue).FindProperty("Name"));
+					ve.Q<TextField>().BindProperty(GetOrCreateSerializedObject(evt.newValue).FindProperty("Name"));
 					var list = ve.Q<ListView>();
-					list.BindProperty(new SerializedObject(evt.newValue).FindProperty("Colliders"));
+					list.BindProperty(GetOrCreateSerializedObject(evt.newValue).FindProperty("Colliders"));
 				});
 				//ve.Q<TextField>().RegisterValueChangedCallback(evt => {
 				//	ve.name = evt.newValue;
@@ -140,29 +141,31 @@ namespace colloid.VRM10Ex
 			SpringBoneExColliderGroupsList.bindItem = (ve,i) => {
 				ve.Q<ObjectField>().BindProperty(m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups.Array.data[{i}]"));
 				if (ve.Q<ObjectField>().value == null) return;
-				ve.Q<TextField>().BindProperty(new SerializedObject(m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups.Array.data[{i}]").objectReferenceValue).FindProperty("Name"));
+				var colliderGroupObj = m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups.Array.data[{i}]").objectReferenceValue;
+				ve.Q<TextField>().BindProperty(GetOrCreateSerializedObject(colliderGroupObj).FindProperty("Name"));
 				var list = ve.Q<ListView>();
-				list.BindProperty(new SerializedObject(m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups.Array.data[{i}]").objectReferenceValue).FindProperty("Colliders"));
+				list.BindProperty(GetOrCreateSerializedObject(colliderGroupObj).FindProperty("Colliders"));
 			};
 			SpringBoneExColliderGroupsList.itemsAdded += (o) => {
-				
-				Debug.Log(o.Distinct().Count());
-				
-				//Debug.Log(SpringBoneExColliderGroupsList.itemsSource[o.First() - 1]);
-				
 			};
 			
-			root.Q<Toggle>("DrawColliders").RegisterValueChangedCallback(evt => {
-				#if VRM_125_TO_131
-				m_instances.ToList().ForEach(o => o.Spring.Joints.ForEach(o => o.m_drawCollider = evt.newValue));
-				#endif
+			var drawCollidersToggle = root.Q<Toggle>("DrawColliders");
+			#if VRM_125_TO_131
+			drawCollidersToggle.RegisterValueChangedCallback(evt => {
+				foreach (var inst in m_instances)
+					foreach (var joint in inst.Spring.Joints)
+						joint.m_drawCollider = evt.newValue;
 			});
+			#else
+			drawCollidersToggle.style.display = DisplayStyle.None;
+			#endif
 
 			void SetSliderGroupBoxRegister(string name, string propatyname, string fieldname, VRM10SpringBoneEx instance)
 			{
 				var Curve = root.Q<CurveField>(name);
 				var Slider = root.Q<Slider>(name);
 				var Propaty = typeof(VRM10SpringBoneEx).GetProperty(propatyname);
+				var Field = typeof(VRM10SpringBoneJoint).GetField(fieldname);
 				var CurveToggleButton = root.Q<Button>(name);
 				void SetCurveDisplay(){
 					Curve.style.display = (bool)Propaty.GetValue(instance) ?
@@ -180,14 +183,14 @@ namespace colloid.VRM10Ex
 				}
 				void GetSpringSettings()
 				{
-					var keycount = instance.Spring.Joints.Select(o => typeof(VRM10SpringBoneJoint).GetField(fieldname).GetValue(o)).Distinct().Count();
+					var keycount = instance.Spring.Joints.Select(o => Field.GetValue(o)).Distinct().Count();
 					Propaty.SetValue(instance, keycount > 1);
 				}
 				void SetCurve()
 				{
 					AnimationCurve curve = new AnimationCurve();
 					//Curve.value.ClearKeys();
-					instance.Spring.Joints.Select((o,index) => ((float)typeof(VRM10SpringBoneJoint).GetField(fieldname).GetValue(o),index)).Where(o => o.index < instance.Spring.Joints.Count - 1).ToList().ForEach(o => curve.AddKey(o.index,o.Item1));
+					instance.Spring.Joints.Select((o,index) => ((float)Field.GetValue(o),index)).Where(o => o.index < instance.Spring.Joints.Count - 1).ToList().ForEach(o => curve.AddKey(o.index,o.Item1));
 					Curve.ranges = new Rect(0,Slider.lowValue,1,Slider.highValue);
 					Curve.renderMode = CurveField.RenderMode.Mesh;
 					Curve.value = AnimationCurveUtility.NormalizeCurveTime(curve);
@@ -209,7 +212,7 @@ namespace colloid.VRM10Ex
 				};
 				Slider.RegisterValueChangedCallback(evt => {
 					if (instance.Spring.Joints.Count == 0) return;
-					typeof(VRM10SpringBoneJoint).GetField(fieldname).SetValue(
+					Field.SetValue(
 						instance.Spring.Joints[0],
 						evt.newValue);
 					var curve = Curve.value;
@@ -219,7 +222,7 @@ namespace colloid.VRM10Ex
 					
 					if (!(bool)Propaty.GetValue(instance))
 					{
-						instance.Spring.Joints.ForEach(o => typeof(VRM10SpringBoneJoint).GetField(fieldname).SetValue(o,evt.newValue));
+						instance.Spring.Joints.ForEach(o => Field.SetValue(o,evt.newValue));
 						Curve.SetValueWithoutNotify(new AnimationCurve(new Keyframe[]{new Keyframe(){value = evt.newValue},new Keyframe(){time = 1,value = evt.newValue}}));
 					}
 					
@@ -228,7 +231,7 @@ namespace colloid.VRM10Ex
 				});
 				Curve.RegisterValueChangedCallback(evt => {
 					instance.Spring.Joints.Select((obj,index) => (obj,index)).ToList()
-						.ForEach(o => typeof(VRM10SpringBoneJoint).GetField(fieldname)
+						.ForEach(o => Field
 						.SetValue(o.obj,
 						evt.newValue.Evaluate((float)o.index / Math.Max(instance.Spring.Joints.Count - 2, 1))));
 					Slider.SetValueWithoutNotify(evt.newValue.Evaluate(0));
@@ -242,6 +245,7 @@ namespace colloid.VRM10Ex
 				var CurveBox = root.Q<GroupBox>(name).Q<GroupBox>(name + "XYZ");
 				var Vector = CurveBox.Q<Vector3Field>(name);
 				var Propaty = typeof(VRM10SpringBoneEx).GetProperty(propatyname);
+				var Field = typeof(VRM10SpringBoneJoint).GetField(fieldname);
 				var CurveToggleButton = root.Q<Button>(name);
 				void SetCurveDisplay(){
 					CurveBox.style.display = (bool)Propaty.GetValue(instance) ?
@@ -253,14 +257,14 @@ namespace colloid.VRM10Ex
 				}
 				void GetSpringSettings()
 				{
-					var keycount = instance.Spring.Joints.Select(o => typeof(VRM10SpringBoneJoint).GetField(fieldname).GetValue(o)).Distinct().Count();
+					var keycount = instance.Spring.Joints.Select(o => Field.GetValue(o)).Distinct().Count();
 					Propaty.SetValue(instance, keycount > 1);
 				}
 				void SetCurve()
 				{
 					CurveBox.Query<CurveField>().ToList().Select((value,i) => (value,i)).ToList().ForEach(o => {
 						AnimationCurve curve = new AnimationCurve();
-						instance.Spring.Joints.Select((joint,index) => ((Vector3)typeof(VRM10SpringBoneJoint).GetField(fieldname).GetValue(joint),index)).ToList().ForEach(p => curve.AddKey(p.index,p.Item1[o.i]));
+						instance.Spring.Joints.Select((joint,index) => ((Vector3)Field.GetValue(joint),index)).ToList().ForEach(p => curve.AddKey(p.index,p.Item1[o.i]));
 						o.value.ranges = new Rect(0,-1,1,2);
 						o.value.renderMode = CurveField.RenderMode.Mesh;
 						o.value.value = AnimationCurveUtility.NormalizeCurveTime(curve);
