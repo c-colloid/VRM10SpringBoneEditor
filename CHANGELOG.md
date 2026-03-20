@@ -1,4 +1,4 @@
-[0.1.3] 2026.03.21
+[0.2.0] 2026.03.21
 AngleLimit（Cone/Hinge/Spherical）とSpace座標軸のギズモ表示を追加
 コライダーグループのギズモ表示を追加
 Spring名・Joint名のラベル表示を追加
