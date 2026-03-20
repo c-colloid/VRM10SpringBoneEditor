@@ -256,22 +256,38 @@ namespace colloid.VRM10Ex.Utility
 			slider.RegisterValueChangedCallback(evt =>
 			{
 				if (joints.Count == 0) return;
-				SetFieldWithUndo(joints[0], field, evt.newValue);
-
-				if (curveField != null)
-				{
-					var curve = curveField.value;
-					var add = curve.AddKey(0, evt.newValue);
-					if (add < 0) curve.MoveKey(0, new Keyframe(0, evt.newValue));
-					curveField.SetValueWithoutNotify(curve);
-				}
 
 				if (!ex.IsCurveEnabled(field.Name))
 				{
+					// カーブOFF: 全 Joint に同値
 					SetFieldWithUndo(joints, field, evt.newValue);
 					curveField?.SetValueWithoutNotify(new AnimationCurve(
 						new Keyframe { value = evt.newValue },
 						new Keyframe { time = 1, value = evt.newValue }));
+				}
+				else
+				{
+					// カーブON: 比率スケールで全 Joint を更新（カーブ形状を保持）
+					var prev = evt.previousValue;
+					var canScale = prev != 0f;
+					var ratio = canScale ? evt.newValue / prev : 0f;
+					for (int i = 0; i < joints.Count; i++)
+					{
+						var cur = (float)field.GetValue(joints[i]);
+						SetFieldWithUndo(joints[i], field, canScale ? cur * ratio : evt.newValue);
+					}
+					// カーブキーも同様にスケール
+					if (curveField != null)
+					{
+						var curve = curveField.value;
+						for (int k = 0; k < curve.length; k++)
+						{
+							var key = curve[k];
+							key.value = canScale ? key.value * ratio : evt.newValue;
+							curve.MoveKey(k, key);
+						}
+						curveField.SetValueWithoutNotify(curve);
+					}
 				}
 
 				onChanged?.Invoke();
@@ -387,9 +403,32 @@ namespace colloid.VRM10Ex.Utility
 			vector3Field.RegisterValueChangedCallback(evt =>
 			{
 				if (!ex.IsCurveEnabled(field.Name))
+				{
 					SetFieldWithUndo(joints, field, evt.newValue);
+				}
 				else
-					SetFieldWithUndo(joints[0], field, evt.newValue);
+				{
+					// カーブON: 全 Joint にデルタ加算（カーブ形状を保持）
+					var delta = evt.newValue - evt.previousValue;
+					for (int i = 0; i < joints.Count; i++)
+					{
+						var cur = (Vector3)field.GetValue(joints[i]);
+						SetFieldWithUndo(joints[i], field, cur + delta);
+					}
+					// 軸ごとのカーブキーをデルタシフト
+					for (int axis = 0; axis < 3; axis++)
+					{
+						var curve = curveFields[axis].value;
+						var axisDelta = delta[axis];
+						for (int k = 0; k < curve.length; k++)
+						{
+							var key = curve[k];
+							key.value += axisDelta;
+							curve.MoveKey(k, key);
+						}
+						curveFields[axis].SetValueWithoutNotify(curve);
+					}
+				}
 				onChanged?.Invoke();
 			});
 
