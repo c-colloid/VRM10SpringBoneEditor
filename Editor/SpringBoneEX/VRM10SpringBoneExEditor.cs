@@ -1,12 +1,12 @@
-﻿using System.Collections;
+using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
 using UnityEngine;
 using UnityEngine.UIElements;
 using UnityEditor;
 using UnityEditor.UIElements;
 using UniVRM10;
-using System.Linq;
-using System;
 using colloid.VRM10Ex.Utility;
 
 namespace colloid.VRM10Ex
@@ -16,21 +16,16 @@ namespace colloid.VRM10Ex
 	{
 		[SerializeField]
 		VisualTreeAsset m_springBoneExUI, m_springBoneExColliderGroupsList;
-		
+
 		VRM10SpringBoneEx m_instance;
 		Vrm10Instance m_VRM10Instance;
-		
+
 		SerializedObject m_VRMInstance;
 		string m_spring;
-		
-		//MultipleEdit
+
+		// MultipleEdit
 		VRM10SpringBoneEx[] m_instances;
 		string[] m_springs;
-		
-		float m_stiffnessSlider,
-			m_gravitySlider,
-			m_dragSlider,
-			m_radiusSlider;
 
 		// SerializedObjectキャッシュ（bindItem内でのリーク防止）
 		readonly Dictionary<UnityEngine.Object, SerializedObject> m_serializedObjectCache = new Dictionary<UnityEngine.Object, SerializedObject>();
@@ -51,94 +46,139 @@ namespace colloid.VRM10Ex
 				so?.Dispose();
 			m_serializedObjectCache.Clear();
 		}
-		
-		// This function is called when the object is loaded.
-		protected void OnEnable() {
-			if (m_springBoneExUI == null) 
+
+		protected void OnEnable()
+		{
+			if (m_springBoneExUI == null)
 				m_springBoneExUI = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(AssetDatabase.GUIDToAssetPath("513d600b93ba1304e8347be91dd549e0"));
-			if (m_springBoneExColliderGroupsList == null) 
+			if (m_springBoneExColliderGroupsList == null)
 				m_springBoneExColliderGroupsList = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(AssetDatabase.GUIDToAssetPath("e1ce3a43555952b47b50c0fe89b56c37"));
-			(this.target as VRM10SpringBoneEx).Init();
+			var ex = this.target as VRM10SpringBoneEx;
+			if (ex != null) ex.Init();
 			Init();
 		}
-		
-		// This function is called when the scriptable object will be destroyed.
-		protected void OnDestroy() {
+
+		protected void OnDestroy()
+		{
 			m_VRMInstance?.Dispose();
 			DisposeSerializedObjectCache();
 
 			if (this.target != null) return;
-			if (m_instance == null || m_VRM10Instance == null) return;
+			if (m_VRM10Instance == null) return;
 
-			m_instance.DestroyImmediate();
+			m_instance?.DestroyImmediate();
 		}
-		
+
+		void OnSceneGUI()
+		{
+			if (m_instance == null || m_instance.Target == null) return;
+			if (m_VRM10Instance == null) return;
+
+			foreach (var spring in m_VRM10Instance.SpringBone.Springs)
+			{
+				if (!spring.Joints.Contains(m_instance.Target)) continue;
+
+				int jointIndex = spring.Joints.IndexOf(m_instance.Target);
+
+				// ラベル
+				SpringBoneGizmoDrawer.DrawLabel(
+					spring.Name, m_instance.SpringIndex,
+					m_instance.Target.name, jointIndex,
+					m_instance.Target.transform.position);
+
+				// AngleLimit + Space（全 Joint を描画）
+				for (int j = 0; j < spring.Joints.Count - 1; j++)
+				{
+					var head = spring.Joints[j]?.transform;
+					var tail = spring.Joints[j + 1]?.transform;
+					if (head == null || tail == null) continue;
+					SpringBoneGizmoDrawer.DrawAngleLimitAndSpace(
+						spring.Joints[j], head, tail);
+				}
+				break;
+			}
+		}
+
 		public override VisualElement CreateInspectorGUI()
 		{
 			var root = new VisualElement();
+			if (m_VRMInstance == null || m_spring == null)
+			{
+				root.Add(new HelpBox("VRM10 Instance が見つかりません。VRM ヒエラルキー内に配置してください。", HelpBoxMessageType.Error));
+				return root;
+			}
 			m_springBoneExUI.CloneTree(root);
-			
-			var SpringName = root.Q<TextField>("SpringName");
-			SpringName.BindProperty(m_VRMInstance.FindProperty($"{m_spring}.Name"));
-			SpringName.RegisterValueChangedCallback(evt => {
-				//m_VRM10Instance.SpringBone.Springs[m_instance.SpringIndex].Name = evt.newValue;
+
+			// --- 静的UI バインディング ---
+
+			// Spring Name
+			var springName = root.Q<TextField>("SpringName");
+			springName.BindProperty(m_VRMInstance.FindProperty($"{m_spring}.Name"));
+			springName.RegisterValueChangedCallback(evt =>
+			{
 				m_instance.Name = evt.newValue;
 			});
-			
-			var TargetBone = root.Q<ObjectField>("Target");
-			TargetBone.SetEnabled(m_instances.Length < 2);
-			TargetBone.RegisterCallback<DragUpdatedEvent>(evt => {
+
+			// Target
+			var targetBone = root.Q<ObjectField>("Target");
+			targetBone.SetEnabled(m_instances.Length < 2);
+			targetBone.RegisterCallback<DragUpdatedEvent>(evt =>
+			{
 				if (DragAndDrop.objectReferences.All(o => o is GameObject))
 					DragAndDrop.visualMode = DragAndDropVisualMode.Generic;
 			});
-			TargetBone.RegisterCallback<DragPerformEvent>(evt => {
-				var obj = DragAndDrop.objectReferences.FirstOrDefault();
-				if (!(obj as GameObject).TryGetComponent<VRM10SpringBoneJoint>(out var result))
-					obj = (obj as GameObject).AddComponent<VRM10SpringBoneJoint>();
-				TargetBone.value = obj as VRM10SpringBoneJoint;
+			targetBone.RegisterCallback<DragPerformEvent>(evt =>
+			{
+				DragAndDrop.AcceptDrag();
+				var obj = DragAndDrop.objectReferences.FirstOrDefault() as GameObject;
+				if (obj == null) return;
+				if (!obj.TryGetComponent<VRM10SpringBoneJoint>(out var joint))
+					joint = Undo.AddComponent<VRM10SpringBoneJoint>(obj);
+				targetBone.value = joint;
 			});
-			TargetBone.RegisterValueChangedCallback(evt => {
+			targetBone.RegisterValueChangedCallback(evt =>
+			{
 				if (evt.previousValue != null)
 					(evt.previousValue as VRM10SpringBoneJoint).GetComponentsInChildren<VRM10SpringBoneJoint>().ToList().ForEach(o => DestroyImmediate(o));
-				
+
 				var val = evt.newValue as VRM10SpringBoneJoint;
-				if (val == null){
+				if (val == null)
+				{
 					m_VRM10Instance.SpringBone.Springs[m_instance.SpringIndex].Joints.Clear();
 					return;
 				}
 				if (val.GetComponentsInChildren<Transform>().Any(o => !o.TryGetComponent<VRM10SpringBoneJoint>(out var result)))
 					val.GetComponentsInChildren<Transform>().Where(o => !o.TryGetComponent<VRM10SpringBoneJoint>(out var result)).ToList()
 					.ForEach(o => o.gameObject.AddComponent<VRM10SpringBoneJoint>());
-					
-				List<VRM10SpringBoneJoint> joints = 
+
+				List<VRM10SpringBoneJoint> joints =
 					val.GetComponentsInChildren<VRM10SpringBoneJoint>().ToList();
 				m_VRM10Instance.SpringBone.Springs[m_instance.SpringIndex].Joints = joints;
-				//m_instance.Target = joints[0];
 			});
-			
-			var SpringBoneExColliderGroupsList = root.Q<ListView>();
-			SpringBoneExColliderGroupsList.BindProperty(m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups"));
-			SpringBoneExColliderGroupsList.makeItem = () => {
-				var ve = 
-					m_springBoneExColliderGroupsList.CloneTree();
-				ve.Q<ObjectField>().RegisterValueChangedCallback(evt => {
-					if (evt.newValue == null) {
+
+			// ColliderGroups ListView
+			var colliderGroupsList = root.Q<ListView>();
+			colliderGroupsList.BindProperty(m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups"));
+			colliderGroupsList.makeItem = () =>
+			{
+				var ve = m_springBoneExColliderGroupsList.CloneTree();
+				ve.Q<ObjectField>().RegisterValueChangedCallback(evt =>
+				{
+					if (evt.newValue == null)
+					{
 						ve.Q<TextField>().Unbind();
 						ve.Q<ListView>().Unbind();
-						ve.Q<ListView>().makeItem = () => new ObjectField(){objectType = typeof(VRM10SpringBoneCollider)};
+						ve.Q<ListView>().makeItem = () => new ObjectField() { objectType = typeof(VRM10SpringBoneCollider) };
 						return;
 					}
-					
 					ve.Q<TextField>().BindProperty(GetOrCreateSerializedObject(evt.newValue).FindProperty("Name"));
 					var list = ve.Q<ListView>();
 					list.BindProperty(GetOrCreateSerializedObject(evt.newValue).FindProperty("Colliders"));
 				});
-				//ve.Q<TextField>().RegisterValueChangedCallback(evt => {
-				//	ve.name = evt.newValue;
-				//});
 				return ve;
 			};
-			SpringBoneExColliderGroupsList.bindItem = (ve,i) => {
+			colliderGroupsList.bindItem = (ve, i) =>
+			{
 				ve.Q<ObjectField>().BindProperty(m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups.Array.data[{i}]"));
 				if (ve.Q<ObjectField>().value == null) return;
 				var colliderGroupObj = m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups.Array.data[{i}]").objectReferenceValue;
@@ -146,189 +186,105 @@ namespace colloid.VRM10Ex
 				var list = ve.Q<ListView>();
 				list.BindProperty(GetOrCreateSerializedObject(colliderGroupObj).FindProperty("Colliders"));
 			};
-			SpringBoneExColliderGroupsList.itemsAdded += (o) => {
-			};
-			
-			var drawCollidersToggle = root.Q<Toggle>("DrawColliders");
-			#if VRM_125_TO_131
-			drawCollidersToggle.RegisterValueChangedCallback(evt => {
-				foreach (var inst in m_instances)
-					foreach (var joint in inst.Spring.Joints)
-						joint.m_drawCollider = evt.newValue;
-			});
-			#else
-			drawCollidersToggle.style.display = DisplayStyle.None;
-			#endif
+			colliderGroupsList.itemsAdded += (o) => { };
 
-			void SetSliderGroupBoxRegister(string name, string propatyname, string fieldname, VRM10SpringBoneEx instance)
+			// --- 動的UI生成 ---
+			var container = root.Q<VisualElement>("DynamicFieldsContainer");
+			if (m_instance.Target != null && m_instance.Spring != null && m_instance.Spring.Joints.Count > 0)
 			{
-				var Curve = root.Q<CurveField>(name);
-				var Slider = root.Q<Slider>(name);
-				var Propaty = typeof(VRM10SpringBoneEx).GetProperty(propatyname);
-				var Field = typeof(VRM10SpringBoneJoint).GetField(fieldname);
-				var CurveToggleButton = root.Q<Button>(name);
-				void SetCurveDisplay(){
-					Curve.style.display = (bool)Propaty.GetValue(instance) ?
-						DisplayStyle.Flex : DisplayStyle.None;
-				}
-				void SetCurveToggleButtonStyle(){
-					CurveToggleButton.text = (bool)Propaty.GetValue(instance) ?
-						"X" : "C";
-				}
-				void SetCurveConextMenu(){
-					Curve.AddManipulator(new ContextualMenuManipulator(evt => {
-						evt.menu.AppendAction("Copy",action => {AnimationCurveUtility.Buffer = Curve.value;},DropdownMenuAction.AlwaysEnabled);
-						evt.menu.AppendAction("Paste",action => {Curve.value = AnimationCurveUtility.Buffer;}, AnimationCurveUtility.Buffer == null ? DropdownMenuAction.AlwaysDisabled : DropdownMenuAction.AlwaysEnabled);
-					}));
-				}
-				void GetSpringSettings()
+				foreach (var instance in m_instances)
 				{
-					var keycount = instance.Spring.Joints.Select(o => Field.GetValue(o)).Distinct().Count();
-					Propaty.SetValue(instance, keycount > 1);
+					JointFieldUIGenerator.GenerateUI(
+						container,
+						instance.Spring.Joints,
+						instance,
+						() => { UpdateJointRuntime(); SceneView.RepaintAll(); });
 				}
-				void SetCurve()
-				{
-					AnimationCurve curve = new AnimationCurve();
-					//Curve.value.ClearKeys();
-					instance.Spring.Joints.Select((o,index) => ((float)Field.GetValue(o),index)).Where(o => o.index < instance.Spring.Joints.Count - 1).ToList().ForEach(o => curve.AddKey(o.index,o.Item1));
-					Curve.ranges = new Rect(0,Slider.lowValue,1,Slider.highValue);
-					Curve.renderMode = CurveField.RenderMode.Mesh;
-					Curve.value = AnimationCurveUtility.NormalizeCurveTime(curve);
-				}
-				GetSpringSettings();
-				SetCurve();
-				
-				Curve.RegisterValueChangedCallback(evt => {
-					
-				});
-				
-				SetCurveDisplay();
-				SetCurveToggleButtonStyle();
-				SetCurveConextMenu();
-				CurveToggleButton.clicked += () => {
-					Propaty.SetValue(instance,!(bool)Propaty.GetValue(instance));
-					SetCurveDisplay();
-					SetCurveToggleButtonStyle();
-				};
-				Slider.RegisterValueChangedCallback(evt => {
-					if (instance.Spring.Joints.Count == 0) return;
-					Field.SetValue(
-						instance.Spring.Joints[0],
-						evt.newValue);
-					var curve = Curve.value;
-					var add = curve.AddKey(0,evt.newValue);
-					if (add < 0) curve.MoveKey(0,new Keyframe(0,evt.newValue));
-					Curve.SetValueWithoutNotify(curve);
-					
-					if (!(bool)Propaty.GetValue(instance))
-					{
-						instance.Spring.Joints.ForEach(o => Field.SetValue(o,evt.newValue));
-						Curve.SetValueWithoutNotify(new AnimationCurve(new Keyframe[]{new Keyframe(){value = evt.newValue},new Keyframe(){time = 1,value = evt.newValue}}));
-					}
-					
-					if (EditorApplication.isPlaying)
-						m_VRM10Instance.Runtime.ReconstructSpringBone();
-				});
-				Curve.RegisterValueChangedCallback(evt => {
-					instance.Spring.Joints.Select((obj,index) => (obj,index)).ToList()
-						.ForEach(o => Field
-						.SetValue(o.obj,
-						evt.newValue.Evaluate((float)o.index / Math.Max(instance.Spring.Joints.Count - 2, 1))));
-					Slider.SetValueWithoutNotify(evt.newValue.Evaluate(0));
-					
-					if (EditorApplication.isPlaying)
-						m_VRM10Instance.Runtime.ReconstructSpringBone();
-				});
 			}
-			void SetVector3GroupBoxRegister(string name, string propatyname, string fieldname, VRM10SpringBoneEx instance)
+
+			// Center
+			root.Q<ObjectField>("Center").BindProperty(m_VRMInstance.FindProperty($"{m_spring}.Center"));
+			root.Q<ObjectField>("Center").RegisterValueChangedCallback(evt =>
 			{
-				var CurveBox = root.Q<GroupBox>(name).Q<GroupBox>(name + "XYZ");
-				var Vector = CurveBox.Q<Vector3Field>(name);
-				var Propaty = typeof(VRM10SpringBoneEx).GetProperty(propatyname);
-				var Field = typeof(VRM10SpringBoneJoint).GetField(fieldname);
-				var CurveToggleButton = root.Q<Button>(name);
-				void SetCurveDisplay(){
-					CurveBox.style.display = (bool)Propaty.GetValue(instance) ?
-						DisplayStyle.Flex : DisplayStyle.None;
-				}
-				void SetCurveToggleButtonStyle(){
-					CurveToggleButton.text = (bool)Propaty.GetValue(instance) ?
-						"X" : "C";
-				}
-				void GetSpringSettings()
-				{
-					var keycount = instance.Spring.Joints.Select(o => Field.GetValue(o)).Distinct().Count();
-					Propaty.SetValue(instance, keycount > 1);
-				}
-				void SetCurve()
-				{
-					CurveBox.Query<CurveField>().ToList().Select((value,i) => (value,i)).ToList().ForEach(o => {
-						AnimationCurve curve = new AnimationCurve();
-						instance.Spring.Joints.Select((joint,index) => ((Vector3)Field.GetValue(joint),index)).ToList().ForEach(p => curve.AddKey(p.index,p.Item1[o.i]));
-						o.value.ranges = new Rect(0,-1,1,2);
-						o.value.renderMode = CurveField.RenderMode.Mesh;
-						o.value.value = AnimationCurveUtility.NormalizeCurveTime(curve);
-					});
-				}
-				GetSpringSettings();
-				SetCurve();
-				
-				SetCurveDisplay();
-				SetCurveToggleButtonStyle();
-				root.Q<Button>(name).clicked += () => {
-					Propaty.SetValue(instance,!(bool)Propaty.GetValue(instance));
-					SetCurveDisplay();
-					SetCurveToggleButtonStyle();
-				};
-			}
-			foreach (var instance in m_instances)
-			{
-				SetSliderGroupBoxRegister("StiffnessForce", nameof(m_instance.StiffnessForceCurveValidate), "m_stiffnessForce", instance);
-				SetSliderGroupBoxRegister("GravityPower", nameof(m_instance.GravityPowerCurveValidate), "m_gravityPower", instance);
-				SetVector3GroupBoxRegister("GravityDir", nameof(m_instance.GravityDirCurveValidate), "m_gravityDir", instance);
-				SetSliderGroupBoxRegister("DragForce", nameof(m_instance.DragForceCurveValidate), "m_dragForce", instance);
-				SetSliderGroupBoxRegister("JointRadius", nameof(m_instance.JointRadiusCurveValidate), "m_jointRadius", instance);	
-			}
-			
-			
-			root.Q<ObjectField>("Center").BindProperty(m_VRMInstance.FindProperty($"{m_spring}.Center"));	
-			root.Q<ObjectField>("Center").RegisterValueChangedCallback(evt => {
 				foreach (var instance in m_instances)
 				{
 					m_VRM10Instance.SpringBone.Springs[instance.SpringIndex].Center = evt.newValue as Transform;
 				}
 			});
-			
-			var DefaultInspector = new Foldout(){text = "DefaultInspector",value = false};
-			DefaultInspector.Add(new IMGUIContainer(() => DrawDefaultInspector()));
-			root.Add(DefaultInspector);
-			
+
+			// DefaultInspector
+			var defaultInspector = new Foldout() { text = "DefaultInspector", value = false };
+			defaultInspector.Add(new IMGUIContainer(() => DrawDefaultInspector()));
+			root.Add(defaultInspector);
+
 			return root;
 		}
-		
+
 		void Init()
 		{
 			m_instance = this.target as VRM10SpringBoneEx;
+			if (m_instance == null) return;
 			m_VRM10Instance = m_instance.GetComponentInParent<Vrm10Instance>();
-			
+			if (m_VRM10Instance == null) return;
+
+			m_VRMInstance?.Dispose();
 			m_VRMInstance = new SerializedObject(m_VRM10Instance);
-			m_spring = $"SpringBone.Springs.Array.data[{m_instance.SpringIndex}]";
-			//Debug.Log(m_spring);
-			m_instances = this.targets.ToList().Select(o => o as VRM10SpringBoneEx).ToArray();
-			m_springs = m_instances.ToList().Select(o => $"SpringBone.Springs.Array.data[{o.SpringIndex}]").ToArray();
-			m_instances.ToList().ForEach(o => {
-				var instance = o as VRM10SpringBoneEx;
-				var spring = $"SpringBone.Springs.Array.data[{instance.SpringIndex}]";
-				//Debug.Log(spring);
-			});
-			
-			//Debug.Log(targetVRM);
-			
-			//var targetJoint = targetVRM.SpringBone.Springs[0].Joints[0];
-			//m_stiffnessSlider = targetJoint.m_stiffnessForce;
-			//m_gravitySlider = targetJoint.m_gravityPower;
-			//m_dragSlider = targetJoint.m_dragForce;
-			//m_radiusSlider = targetJoint.m_jointRadius;
+
+			var springIndex = m_instance.SpringIndex;
+			m_spring = springIndex >= 0
+				? $"SpringBone.Springs.Array.data[{springIndex}]"
+				: null;
+
+			m_instances = this.targets.ToList().Select(o => o as VRM10SpringBoneEx).Where(o => o != null).ToArray();
+			m_springs = m_instances.Select(o => o.SpringIndex >= 0
+				? $"SpringBone.Springs.Array.data[{o.SpringIndex}]"
+				: null).ToArray();
+		}
+
+		// Play中のJoint更新: SetJointLevel（0.131+）or ReconstructSpringBone（旧版）
+		static MethodInfo s_setJointLevel;
+		static MethodInfo s_reconstructSpringBone;
+		static PropertyInfo s_blittableProperty;
+		static PropertyInfo s_springBoneProperty; // Vrm10Runtime.SpringBone (0.131+)
+		static bool s_runtimeMethodsCached;
+
+		void UpdateJointRuntime()
+		{
+			if (!EditorApplication.isPlaying || m_VRM10Instance == null) return;
+
+			var runtime = m_VRM10Instance.Runtime;
+			if (runtime == null) return;
+
+			if (!s_runtimeMethodsCached)
+			{
+				// IVrm10SpringBoneRuntime は VRM 0.131+ でのみ存在するため、リフレクションで取得
+				var runtimeType = AppDomain.CurrentDomain.GetAssemblies()
+					.SelectMany(a => { try { return a.GetTypes(); } catch { return Type.EmptyTypes; } })
+					.FirstOrDefault(t => t.Name == "IVrm10SpringBoneRuntime");
+				if (runtimeType != null)
+					s_setJointLevel = runtimeType.GetMethod("SetJointLevel");
+				s_blittableProperty = typeof(VRM10SpringBoneJoint).GetProperty("Blittable");
+
+				// Vrm10Runtime.SpringBone プロパティ（0.131+）
+				var vrm10RuntimeType = runtime.GetType();
+				s_springBoneProperty = vrm10RuntimeType.GetProperty("SpringBone");
+				s_reconstructSpringBone = vrm10RuntimeType.GetMethod("ReconstructSpringBone");
+				s_runtimeMethodsCached = true;
+			}
+
+			// 0.131+: Runtime.SpringBone.SetJointLevel(transform, blittable)
+			if (s_setJointLevel != null && s_blittableProperty != null
+				&& s_springBoneProperty != null && m_instance.Target != null)
+			{
+				var springBone = s_springBoneProperty.GetValue(runtime);
+				var blittable = s_blittableProperty.GetValue(m_instance.Target);
+				s_setJointLevel.Invoke(springBone, new[] { m_instance.Target.transform, blittable });
+			}
+			// フォールバック: ReconstructSpringBone（全バージョン）
+			else if (s_reconstructSpringBone != null)
+			{
+				s_reconstructSpringBone.Invoke(runtime, null);
+			}
 		}
 	}
 }
