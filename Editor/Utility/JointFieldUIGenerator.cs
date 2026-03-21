@@ -1,0 +1,780 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using UnityEngine;
+using UnityEngine.UIElements;
+using UnityEditor;
+using UnityEditor.UIElements;
+using UniVRM10;
+using CustomUI;
+
+namespace colloid.VRM10Ex.Utility
+{
+	/// <summary>
+	/// VRM10SpringBoneJoint のフィールドを型推論で走査し、
+	/// マルチJoint対応のUIを動的に生成する。
+	/// </summary>
+	public static class JointFieldUIGenerator
+	{
+		/// <summary>
+		/// Undo/Redo リフレッシュ用にUI要素へタグ付けするデータ。
+		/// </summary>
+		class FieldTag
+		{
+			public FieldInfo Field;
+			public List<VRM10SpringBoneJoint> Joints;
+			public FieldOverride Override;
+			public VRM10SpringBoneEx[] AllInstances;
+		}
+
+		/// <summary>
+		/// Joint の全フィールドを走査し、型推論でマルチJoint対応UIを生成。
+		/// 戻り値は Undo/Redo 時に全UI値を再読み込みするリフレッシュ Action。
+		/// </summary>
+		public static Action GenerateUI(
+			VisualElement container,
+			List<VRM10SpringBoneJoint> allJoints,
+			VRM10SpringBoneEx springBoneEx,
+			Action onValueChanged,
+			VRM10SpringBoneEx[] allInstances = null)
+		{
+			if (allJoints == null || allJoints.Count == 0 || allJoints[0] == null) return null;
+
+			var jointType = typeof(VRM10SpringBoneJoint);
+			var fields = jointType
+				.GetFields(BindingFlags.Public | BindingFlags.Instance)
+				.Where(f => !FieldRegistry.IsInternalField(f.Name))
+				.ToList();
+
+			// Overrides に登録されたフィールドを先に、順序通りに処理
+			var orderedFields = new List<FieldInfo>();
+			var registeredNames = new HashSet<string>();
+
+			foreach (var over in FieldRegistry.Overrides)
+			{
+				var field = fields.Find(f => f.Name == over.FieldName);
+				if (field != null)
+				{
+					orderedFields.Add(field);
+					registeredNames.Add(field.Name);
+				}
+			}
+
+			// 未登録フィールドを末尾に追加
+			foreach (var field in fields)
+			{
+				if (!registeredNames.Contains(field.Name))
+					orderedFields.Add(field);
+			}
+
+			string currentGroup = null;
+			VisualElement groupContainer = container;
+			var angleLimitFields = new Dictionary<string, VisualElement>();
+
+			foreach (var fieldInfo in orderedFields)
+			{
+				var over = FieldRegistry.GetOverride(fieldInfo.Name);
+
+				// グループ切替
+				var group = over?.Group;
+				if (group != currentGroup)
+				{
+					currentGroup = group;
+					if (group != null)
+					{
+						groupContainer = CreateGroupFoldout(container, group);
+						if (group == "AngleLimit")
+						{
+							// draft 警告
+							groupContainer.Add(new HelpBox(
+								"SpringBoneの角度制限はまだdraft仕様です。将来的に仕様が変更される可能性があります。",
+								HelpBoxMessageType.Warning));
+						}
+					}
+					else
+					{
+						groupContainer = container;
+					}
+				}
+
+				var displayName = over?.DisplayName
+					?? FieldRegistry.AutoDisplayName(fieldInfo.Name);
+
+				var element = CreateFieldUI(
+					fieldInfo, displayName, over, allJoints,
+					springBoneEx, onValueChanged, allInstances);
+
+				if (element != null)
+				{
+					groupContainer.Add(element);
+
+					// AngleLimit グループ内のフィールドを追跡
+					if (group == "AngleLimit")
+						angleLimitFields[fieldInfo.Name] = element;
+				}
+			}
+
+			// AngleLimit の条件表示ロジック
+			SetupAngleLimitVisibility(allJoints, angleLimitFields, onValueChanged);
+
+			return () => RefreshAll(container, allJoints);
+		}
+
+		// ─── Undo/Redo 一括リフレッシュ ───
+
+		/// <summary>
+		/// container 配下の FieldTag 付き要素を走査し、Joint の現在値でUIを更新。
+		/// </summary>
+		static void RefreshAll(VisualElement container, List<VRM10SpringBoneJoint> joints)
+		{
+			if (joints == null || joints.Count == 0 || joints[0] == null) return;
+
+			container.Query<VisualElement>().ForEach(e =>
+			{
+				if (e.userData is not FieldTag tag) return;
+				var value = tag.Field.GetValue(tag.Joints[0]);
+				bool multiEdit = tag.AllInstances != null && tag.AllInstances.Length > 1;
+				bool mixed = multiEdit && IsMixedValue(tag.AllInstances, tag.Field);
+
+				switch (e)
+				{
+					case SliderWithCurve slider:
+						slider.SetValueWithoutNotify((float)value);
+						slider.showMixedValue = mixed;
+						if (!multiEdit)
+						{
+							var (sMin, sMax) = FieldRegistry.GetSliderRange(tag.Field, tag.Override);
+							InitializeCurve(slider.Q<CurveField>(), tag.Field, tag.Joints, sMin, sMax);
+						}
+						break;
+					case FloatField floatField:
+						floatField.SetValueWithoutNotify((float)value);
+						floatField.showMixedValue = mixed;
+						break;
+					case EnumField enumField:
+						enumField.SetValueWithoutNotify((Enum)value);
+						enumField.showMixedValue = mixed;
+						break;
+					case Toggle toggle:
+						toggle.SetValueWithoutNotify((bool)value);
+						toggle.showMixedValue = mixed;
+						break;
+					case IntegerField intField:
+						intField.SetValueWithoutNotify((int)value);
+						intField.showMixedValue = mixed;
+						break;
+					case Vector4Field v4Field:
+						var q = (Quaternion)value;
+						v4Field.SetValueWithoutNotify(new Vector4(q.x, q.y, q.z, q.w));
+						v4Field.showMixedValue = mixed;
+						break;
+					case Vector3Field v3Field:
+						v3Field.SetValueWithoutNotify((Vector3)value);
+						v3Field.showMixedValue = mixed;
+						break;
+				}
+			});
+		}
+
+		static VisualElement CreateFieldUI(
+			FieldInfo fieldInfo, string displayName, FieldOverride over,
+			List<VRM10SpringBoneJoint> joints, VRM10SpringBoneEx ex,
+			Action onChanged, VRM10SpringBoneEx[] allInstances)
+		{
+			var fieldType = fieldInfo.FieldType;
+			var tag = new FieldTag { Field = fieldInfo, Joints = joints, Override = over, AllInstances = allInstances };
+			bool multiEdit = allInstances != null && allInstances.Length > 1;
+
+			if (fieldType == typeof(float))
+				return CreateSliderWithCurve(fieldInfo, displayName, over, joints, ex, onChanged, tag, multiEdit);
+
+			if (fieldType == typeof(Vector3))
+				return CreateVector3WithCurve(fieldInfo, displayName, joints, ex, onChanged, tag, multiEdit);
+
+			if (fieldType.IsEnum)
+				return CreateEnumField(fieldInfo, displayName, joints, onChanged, tag, allInstances);
+
+			if (fieldType == typeof(bool))
+				return CreateToggle(fieldInfo, displayName, joints, onChanged, tag, allInstances);
+
+			if (fieldType == typeof(int))
+				return CreateIntField(fieldInfo, displayName, joints, onChanged, tag, allInstances);
+
+			if (fieldType == typeof(Quaternion))
+				return CreateQuaternionField(fieldInfo, displayName, joints, onChanged, tag, allInstances);
+
+			return CreateDefaultField(fieldInfo, displayName, joints, onChanged);
+		}
+
+		// ─── float → SliderWithCurve ───
+		static VisualElement CreateSliderWithCurve(
+			FieldInfo field, string label, FieldOverride over,
+			List<VRM10SpringBoneJoint> joints, VRM10SpringBoneEx ex,
+			Action onChanged, FieldTag tag, bool multiEdit)
+		{
+			var (min, max) = FieldRegistry.GetSliderRange(field, over);
+			var currentValue = (float)field.GetValue(joints[0]);
+
+			var slider = new SliderWithCurve();
+			slider.label = label;
+			slider.lowValue = min;
+			slider.highValue = max;
+			slider.showInputField = true;
+			slider.userData = tag;
+			slider.SetValueWithoutNotify(currentValue);
+
+			var curveField = slider.Q<CurveField>();
+			var toggleButton = slider.Q<ToggleButton>();
+
+			if (multiEdit)
+			{
+				// 複数選択: カーブ・トグル非表示、ミックス判定
+				if (curveField != null)
+					curveField.style.display = DisplayStyle.None;
+				if (toggleButton != null)
+					toggleButton.style.display = DisplayStyle.None;
+				slider.showMixedValue = IsMixedValue(tag.AllInstances, field);
+			}
+			else
+			{
+				// 単一選択: カーブ初期化
+				var curveEnabled = joints.Select(j => field.GetValue(j)).Distinct().Count() > 1;
+				ex.SetCurveEnabled(field.Name, curveEnabled);
+				InitializeCurve(curveField, field, joints, min, max);
+
+				if (curveField != null)
+					curveField.style.display = curveEnabled ? DisplayStyle.Flex : DisplayStyle.None;
+				if (toggleButton != null)
+				{
+					toggleButton.SetValueWithoutNotify(curveEnabled);
+					toggleButton.text = curveEnabled ? "X" : "C";
+					toggleButton.RegisterValueChangedCallback<bool>(evt =>
+					{
+						ex.SetCurveEnabled(field.Name, evt.newValue);
+					});
+				}
+
+				// カーブのコンテキストメニュー
+				if (curveField != null)
+				{
+					curveField.AddManipulator(new ContextualMenuManipulator(evt =>
+					{
+						evt.menu.AppendAction("Copy",
+							action => AnimationCurveUtility.Buffer = curveField.value,
+							DropdownMenuAction.AlwaysEnabled);
+						evt.menu.AppendAction("Paste",
+							action => curveField.value = AnimationCurveUtility.Buffer,
+							AnimationCurveUtility.Buffer == null
+								? DropdownMenuAction.AlwaysDisabled
+								: DropdownMenuAction.AlwaysEnabled);
+					}));
+				}
+			}
+
+			// スライダー変更コールバック
+			slider.RegisterValueChangedCallback(evt =>
+			{
+				if (joints.Count == 0) return;
+				slider.showMixedValue = false;
+
+				if (multiEdit)
+				{
+					// 複数選択: 全インスタンスに比率スケール
+					ScaleFieldAll(tag.AllInstances, field, evt.newValue);
+				}
+				else if (!ex.IsCurveEnabled(field.Name))
+				{
+					// カーブOFF: 全 Joint に同値
+					SetFieldWithUndo(joints, field, evt.newValue);
+					curveField?.SetValueWithoutNotify(new AnimationCurve(
+						new Keyframe { value = evt.newValue },
+						new Keyframe { time = 1, value = evt.newValue }));
+				}
+				else
+				{
+					// カーブON: 比率スケール
+					var prev = evt.previousValue;
+					var canScale = prev != 0f;
+					var ratio = canScale ? evt.newValue / prev : 0f;
+					for (int i = 0; i < joints.Count; i++)
+					{
+						var cur = (float)field.GetValue(joints[i]);
+						SetFieldWithUndo(joints[i], field, canScale ? cur * ratio : evt.newValue);
+					}
+					if (curveField != null)
+					{
+						var curve = curveField.value;
+						for (int k = 0; k < curve.length; k++)
+						{
+							var key = curve[k];
+							key.value = canScale ? key.value * ratio : evt.newValue;
+							curve.MoveKey(k, key);
+						}
+						curveField.SetValueWithoutNotify(curve);
+					}
+				}
+
+				onChanged?.Invoke();
+			});
+
+			// カーブ変更コールバック（単一選択時のみ有効）
+			if (!multiEdit && curveField != null)
+			{
+				curveField.RegisterValueChangedCallback(evt =>
+				{
+					for (int i = 0; i < joints.Count; i++)
+					{
+						var t = (float)i / Math.Max(joints.Count - 1, 1);
+						SetFieldWithUndo(joints[i], field, evt.newValue.Evaluate(t));
+					}
+					slider.SetValueWithoutNotify(evt.newValue.Evaluate(0));
+					onChanged?.Invoke();
+				});
+			}
+
+			return slider;
+		}
+
+		static void InitializeCurve(CurveField curveField, FieldInfo field,
+			List<VRM10SpringBoneJoint> joints, float min, float max)
+		{
+			if (curveField == null || joints.Count == 0) return;
+			var curve = new AnimationCurve();
+			for (int i = 0; i < joints.Count; i++)
+			{
+				var val = (float)field.GetValue(joints[i]);
+				curve.AddKey(i, val);
+			}
+			curveField.ranges = new Rect(0, min, 1, max);
+			curveField.renderMode = CurveField.RenderMode.Mesh;
+			curveField.value = AnimationCurveUtility.NormalizeCurveTime(curve);
+		}
+
+		// ─── Vector3 → Vector3Field + per-axis Curve ───
+		static VisualElement CreateVector3WithCurve(
+			FieldInfo field, string label,
+			List<VRM10SpringBoneJoint> joints, VRM10SpringBoneEx ex,
+			Action onChanged, FieldTag tag, bool multiEdit)
+		{
+			var groupBox = new GroupBox();
+			groupBox.style.marginTop = 0;
+			groupBox.style.marginBottom = 0;
+			groupBox.style.marginLeft = 0;
+			groupBox.style.marginRight = 0;
+			groupBox.style.flexDirection = FlexDirection.Row;
+
+			var nameLabel = new Label(label);
+			nameLabel.style.minWidth = 120;
+			groupBox.Add(nameLabel);
+
+			var currentValue = (Vector3)field.GetValue(joints[0]);
+			var vector3Field = new Vector3Field();
+			vector3Field.SetValueWithoutNotify(currentValue);
+			vector3Field.style.flexDirection = FlexDirection.Column;
+			vector3Field.style.flexGrow = 1;
+			vector3Field.userData = tag;
+
+			// ミックス値判定
+			if (multiEdit)
+				vector3Field.showMixedValue = IsMixedValue(tag.AllInstances, field);
+
+			// カーブボックス
+			var curveBox = new GroupBox();
+			curveBox.style.flexDirection = FlexDirection.Row;
+			curveBox.style.marginTop = 0;
+			curveBox.style.marginBottom = 0;
+			curveBox.style.marginLeft = 0;
+			curveBox.style.marginRight = 0;
+
+			// トグルボタン
+			var toggleButton = new ToggleButton();
+			toggleButton.style.height = 18;
+			toggleButton.style.marginRight = 1;
+			toggleButton.style.marginLeft = 5;
+
+			CurveField[] curveFields = null;
+
+			if (multiEdit)
+			{
+				// 複数選択: カーブ・トグル非表示
+				curveBox.style.display = DisplayStyle.None;
+				toggleButton.style.display = DisplayStyle.None;
+			}
+			else
+			{
+				// 単一選択: カーブ初期化
+				var curveEnabled = joints.Select(j => field.GetValue(j)).Distinct().Count() > 1;
+				ex.SetCurveEnabled(field.Name, curveEnabled);
+				curveBox.style.display = curveEnabled ? DisplayStyle.Flex : DisplayStyle.None;
+
+				// 軸ごとの CurveField
+				curveFields = new CurveField[3];
+				for (int axis = 0; axis < 3; axis++)
+				{
+					var cf = new CurveField();
+					cf.style.flexGrow = 1;
+					var axisCurve = new AnimationCurve();
+					for (int i = 0; i < joints.Count; i++)
+					{
+						var v = (Vector3)field.GetValue(joints[i]);
+						axisCurve.AddKey(i, v[axis]);
+					}
+					cf.ranges = new Rect(0, -1, 1, 2);
+					cf.renderMode = CurveField.RenderMode.Mesh;
+					cf.value = AnimationCurveUtility.NormalizeCurveTime(axisCurve);
+					curveFields[axis] = cf;
+					curveBox.Add(cf);
+				}
+
+				toggleButton.text = curveEnabled ? "X" : "C";
+				toggleButton.SetValueWithoutNotify(curveEnabled);
+				toggleButton.RegisterValueChangedCallback<bool>(evt =>
+				{
+					ex.SetCurveEnabled(field.Name, evt.newValue);
+					curveBox.style.display = evt.newValue ? DisplayStyle.Flex : DisplayStyle.None;
+					toggleButton.text = evt.newValue ? "X" : "C";
+				});
+			}
+
+			vector3Field.Add(curveBox);
+			groupBox.Add(vector3Field);
+			groupBox.Add(toggleButton);
+
+			// Vector3Field の値変更
+			vector3Field.RegisterValueChangedCallback(evt =>
+			{
+				vector3Field.showMixedValue = false;
+				var delta = evt.newValue - evt.previousValue;
+
+				if (multiEdit)
+				{
+					// 複数選択: 全インスタンスの全 Joint にデルタ加算
+					DeltaFieldAll(tag.AllInstances, field, delta);
+				}
+				else if (!ex.IsCurveEnabled(field.Name))
+				{
+					SetFieldWithUndo(joints, field, evt.newValue);
+				}
+				else
+				{
+					// カーブON: 全 Joint にデルタ加算（カーブ形状を保持）
+					for (int i = 0; i < joints.Count; i++)
+					{
+						var cur = (Vector3)field.GetValue(joints[i]);
+						SetFieldWithUndo(joints[i], field, cur + delta);
+					}
+					// 軸ごとのカーブキーをデルタシフト
+					for (int axis = 0; axis < 3; axis++)
+					{
+						var curve = curveFields[axis].value;
+						var axisDelta = delta[axis];
+						for (int k = 0; k < curve.length; k++)
+						{
+							var key = curve[k];
+							key.value += axisDelta;
+							curve.MoveKey(k, key);
+						}
+						curveFields[axis].SetValueWithoutNotify(curve);
+					}
+				}
+				onChanged?.Invoke();
+			});
+
+			return groupBox;
+		}
+
+		// ─── enum → EnumField (全 Joint 同値適用) ───
+		static VisualElement CreateEnumField(
+			FieldInfo field, string label,
+			List<VRM10SpringBoneJoint> joints, Action onChanged, FieldTag tag,
+			VRM10SpringBoneEx[] allInstances)
+		{
+			var currentValue = field.GetValue(joints[0]);
+			var enumField = new EnumField(label, (Enum)currentValue);
+			enumField.userData = tag;
+
+			bool multiEdit = allInstances != null && allInstances.Length > 1;
+			if (multiEdit)
+				enumField.showMixedValue = IsMixedValue(allInstances, field);
+
+			enumField.RegisterValueChangedCallback(evt =>
+			{
+				enumField.showMixedValue = false;
+				if (multiEdit)
+					SetFieldWithUndoAll(allInstances, field, evt.newValue);
+				else
+					SetFieldWithUndo(joints, field, evt.newValue);
+				onChanged?.Invoke();
+			});
+			return enumField;
+		}
+
+		// ─── bool → Toggle (全 Joint 同値適用) ───
+		static VisualElement CreateToggle(
+			FieldInfo field, string label,
+			List<VRM10SpringBoneJoint> joints, Action onChanged, FieldTag tag,
+			VRM10SpringBoneEx[] allInstances)
+		{
+			var currentValue = (bool)field.GetValue(joints[0]);
+			var toggle = new Toggle(label);
+			toggle.SetValueWithoutNotify(currentValue);
+			toggle.style.marginTop = 5;
+			toggle.style.marginBottom = 5;
+			toggle.userData = tag;
+
+			bool multiEdit = allInstances != null && allInstances.Length > 1;
+			if (multiEdit)
+				toggle.showMixedValue = IsMixedValue(allInstances, field);
+
+			toggle.RegisterValueChangedCallback(evt =>
+			{
+				toggle.showMixedValue = false;
+				if (multiEdit)
+					SetFieldWithUndoAll(allInstances, field, evt.newValue);
+				else
+					SetFieldWithUndo(joints, field, evt.newValue);
+				onChanged?.Invoke();
+			});
+			return toggle;
+		}
+
+		// ─── int → IntegerField (全 Joint 同値適用) ───
+		static VisualElement CreateIntField(
+			FieldInfo field, string label,
+			List<VRM10SpringBoneJoint> joints, Action onChanged, FieldTag tag,
+			VRM10SpringBoneEx[] allInstances)
+		{
+			var currentValue = (int)field.GetValue(joints[0]);
+			var intField = new IntegerField(label);
+			intField.SetValueWithoutNotify(currentValue);
+			intField.userData = tag;
+
+			bool multiEdit = allInstances != null && allInstances.Length > 1;
+			if (multiEdit)
+				intField.showMixedValue = IsMixedValue(allInstances, field);
+
+			intField.RegisterValueChangedCallback(evt =>
+			{
+				intField.showMixedValue = false;
+				if (multiEdit)
+					SetFieldWithUndoAll(allInstances, field, evt.newValue);
+				else
+					SetFieldWithUndo(joints, field, evt.newValue);
+				onChanged?.Invoke();
+			});
+			return intField;
+		}
+
+		// ─── Quaternion → Vector4Field 表現 (全 Joint 同値適用) ───
+		static VisualElement CreateQuaternionField(
+			FieldInfo field, string label,
+			List<VRM10SpringBoneJoint> joints, Action onChanged, FieldTag tag,
+			VRM10SpringBoneEx[] allInstances)
+		{
+			var q = (Quaternion)field.GetValue(joints[0]);
+			var v4Field = new Vector4Field(label);
+			v4Field.SetValueWithoutNotify(new Vector4(q.x, q.y, q.z, q.w));
+			v4Field.userData = tag;
+
+			bool multiEdit = allInstances != null && allInstances.Length > 1;
+			if (multiEdit)
+				v4Field.showMixedValue = IsMixedValue(allInstances, field);
+
+			v4Field.RegisterValueChangedCallback(evt =>
+			{
+				v4Field.showMixedValue = false;
+				var newQ = new Quaternion(evt.newValue.x, evt.newValue.y, evt.newValue.z, evt.newValue.w);
+				if (multiEdit)
+					SetFieldWithUndoAll(allInstances, field, newQ);
+				else
+					SetFieldWithUndo(joints, field, newQ);
+				onChanged?.Invoke();
+			});
+			return v4Field;
+		}
+
+		// ─── その他 → PropertyField フォールバック (全 Joint 同値適用) ───
+		static VisualElement CreateDefaultField(
+			FieldInfo field, string label,
+			List<VRM10SpringBoneJoint> joints, Action onChanged)
+		{
+			// SerializedObject 経由で PropertyField を生成
+			if (joints[0] == null) return null;
+			var so = new SerializedObject(joints[0]);
+			var prop = so.FindProperty(field.Name);
+			if (prop == null) { so.Dispose(); return null; }
+
+			var propField = new PropertyField(prop, label);
+			propField.RegisterValueChangeCallback(evt =>
+			{
+				so.ApplyModifiedProperties();
+				var val = field.GetValue(joints[0]);
+				for (int i = 1; i < joints.Count; i++)
+					SetFieldWithUndo(joints[i], field, val);
+				onChanged?.Invoke();
+			});
+			propField.Bind(so);
+			// UI要素が除去されたら SerializedObject を破棄
+			propField.RegisterCallback<DetachFromPanelEvent>(evt => so.Dispose());
+			return propField;
+		}
+
+		// ─── グループ Foldout 作成 ───
+		static VisualElement CreateGroupFoldout(VisualElement parent, string groupName)
+		{
+			var foldout = new Foldout
+			{
+				text = $"{groupName} Settings",
+				value = false
+			};
+			foldout.style.marginTop = 5;
+			parent.Add(foldout);
+			return foldout;
+		}
+
+		// ─── AngleLimit 条件表示 ───
+		static void SetupAngleLimitVisibility(
+			List<VRM10SpringBoneJoint> joints,
+			Dictionary<string, VisualElement> angleLimitFields,
+			Action onChanged)
+		{
+			if (!angleLimitFields.ContainsKey("m_anglelimitType")) return;
+
+			var typeField = angleLimitFields["m_anglelimitType"] as EnumField;
+			if (typeField == null) return;
+
+			void UpdateVisibility()
+			{
+				var typeName = typeField.value?.ToString() ?? "None";
+				bool isNone = typeName.Equals("None", StringComparison.OrdinalIgnoreCase);
+				bool isSpherical = typeName.Equals("Spherical", StringComparison.OrdinalIgnoreCase);
+				bool showPitch = !isNone;
+				bool showYaw = isSpherical;
+				bool showOffset = !isNone;
+
+				if (angleLimitFields.TryGetValue("m_pitch", out var pitch))
+					pitch.style.display = showPitch ? DisplayStyle.Flex : DisplayStyle.None;
+				if (angleLimitFields.TryGetValue("m_yaw", out var yaw))
+					yaw.style.display = showYaw ? DisplayStyle.Flex : DisplayStyle.None;
+				if (angleLimitFields.TryGetValue("m_limitSpaceOffset", out var offset))
+					offset.style.display = showOffset ? DisplayStyle.Flex : DisplayStyle.None;
+			}
+
+			typeField.RegisterValueChangedCallback(evt => UpdateVisibility());
+			UpdateVisibility();
+		}
+
+		// ─── Undo / Dirty / Repaint ヘルパー ───
+
+		/// <summary>
+		/// Joint リストに対して Undo 記録 → フィールド値設定 → Dirty マーク を一括実行。
+		/// </summary>
+		static void SetFieldWithUndo(
+			List<VRM10SpringBoneJoint> joints, FieldInfo field, object value, string undoName = "Change Joint Parameter")
+		{
+			foreach (var joint in joints)
+			{
+				if (joint == null) continue;
+				Undo.RecordObject(joint, undoName);
+				field.SetValue(joint, value);
+				EditorUtility.SetDirty(joint);
+			}
+		}
+
+		/// <summary>
+		/// 単一 Joint に対して Undo 記録 → フィールド値設定 → Dirty マーク。
+		/// </summary>
+		static void SetFieldWithUndo(
+			VRM10SpringBoneJoint joint, FieldInfo field, object value, string undoName = "Change Joint Parameter")
+		{
+			if (joint == null) return;
+			Undo.RecordObject(joint, undoName);
+			field.SetValue(joint, value);
+			EditorUtility.SetDirty(joint);
+		}
+
+		/// <summary>
+		/// 全インスタンスの全 Joint に対して値を適用。
+		/// </summary>
+		static void SetFieldWithUndoAll(
+			VRM10SpringBoneEx[] instances, FieldInfo field, object value, string undoName = "Change Joint Parameter")
+		{
+			if (instances == null) return;
+			foreach (var inst in instances)
+			{
+				var joints = inst?.Spring?.Joints;
+				if (joints == null) continue;
+				foreach (var joint in joints)
+					SetFieldWithUndo(joint, field, value, undoName);
+			}
+		}
+
+		/// <summary>
+		/// 全インスタンスの全 Joint に比率スケール（float）を適用。
+		/// 各インスタンスの joint[0] の現在値から独自に ratio を算出するため、
+		/// インスタンス間で値が異なっていても正しくスケールする。
+		/// </summary>
+		static void ScaleFieldAll(
+			VRM10SpringBoneEx[] instances, FieldInfo field, float newValue)
+		{
+			if (instances == null) return;
+			foreach (var inst in instances)
+			{
+				var joints = inst?.Spring?.Joints;
+				if (joints == null || joints.Count == 0) continue;
+				var baseJoint = joints[0];
+				if (baseJoint == null) continue;
+
+				var basePrev = (float)field.GetValue(baseJoint);
+				var canScale = basePrev != 0f;
+				var ratio = canScale ? newValue / basePrev : 0f;
+
+				foreach (var joint in joints)
+				{
+					if (joint == null) continue;
+					Undo.RecordObject(joint, "Change Joint Parameter");
+					var cur = (float)field.GetValue(joint);
+					field.SetValue(joint, canScale ? cur * ratio : newValue);
+					EditorUtility.SetDirty(joint);
+				}
+			}
+		}
+
+		/// <summary>
+		/// 全インスタンスの全 Joint にデルタ加算（Vector3）を適用。
+		/// </summary>
+		static void DeltaFieldAll(
+			VRM10SpringBoneEx[] instances, FieldInfo field, Vector3 delta)
+		{
+			if (instances == null) return;
+			foreach (var inst in instances)
+			{
+				var joints = inst?.Spring?.Joints;
+				if (joints == null) continue;
+				foreach (var joint in joints)
+				{
+					if (joint == null) continue;
+					Undo.RecordObject(joint, "Change Joint Parameter");
+					var cur = (Vector3)field.GetValue(joint);
+					field.SetValue(joint, cur + delta);
+					EditorUtility.SetDirty(joint);
+				}
+			}
+		}
+
+		/// <summary>
+		/// 複数インスタンスのミックス判定（先頭 Joint の値を比較）。
+		/// </summary>
+		static bool IsMixedValue(VRM10SpringBoneEx[] instances, FieldInfo field)
+		{
+			if (instances == null || instances.Length <= 1) return false;
+			return instances
+				.Select(inst => inst?.Spring?.Joints)
+				.Where(j => j != null && j.Count > 0 && j[0] != null)
+				.Select(j => field.GetValue(j[0]))
+				.Distinct()
+				.Count() > 1;
+		}
+	}
+}

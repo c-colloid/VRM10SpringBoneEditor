@@ -15,17 +15,6 @@
     "defineConstraints": [
         "UNITY_EDITOR"
     ],
-    "versionDefines": [
-        {
-            "name": "com.vrmc.vrm",
-            "expression": "0.131",
-            "define": "VRM_131_OR_LATER"
-        },
-        {
-            "name": "com.vrmc.vrm",
-            "expression": "[0.125,0.131)",
-            "define": "VRM_125_TO_131"
-        }
-    ],
+    "versionDefines": [],
     "noEngineReferences": false
 }
