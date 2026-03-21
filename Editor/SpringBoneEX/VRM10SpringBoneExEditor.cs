@@ -82,31 +82,35 @@ namespace colloid.VRM10Ex
 
 		void OnSceneGUI()
 		{
-			if (m_instance == null || m_instance.Target == null) return;
 			if (m_VRM10Instance == null) return;
 
-			foreach (var spring in m_VRM10Instance.SpringBone.Springs)
+			foreach (var inst in m_instances)
 			{
-				if (!spring.Joints.Contains(m_instance.Target)) continue;
+				if (inst == null || inst.Target == null) continue;
 
-				int jointIndex = spring.Joints.IndexOf(m_instance.Target);
-
-				// ラベル
-				SpringBoneGizmoDrawer.DrawLabel(
-					spring.Name, m_instance.SpringIndex,
-					m_instance.Target.name, jointIndex,
-					m_instance.Target.transform.position);
-
-				// AngleLimit + Space（全 Joint を描画）
-				for (int j = 0; j < spring.Joints.Count - 1; j++)
+				foreach (var spring in m_VRM10Instance.SpringBone.Springs)
 				{
-					var head = spring.Joints[j]?.transform;
-					var tail = spring.Joints[j + 1]?.transform;
-					if (head == null || tail == null) continue;
-					SpringBoneGizmoDrawer.DrawAngleLimitAndSpace(
-						spring.Joints[j], head, tail);
+					if (!spring.Joints.Contains(inst.Target)) continue;
+
+					int jointIndex = spring.Joints.IndexOf(inst.Target);
+
+					// ラベル
+					SpringBoneGizmoDrawer.DrawLabel(
+						spring.Name, inst.SpringIndex,
+						inst.Target.name, jointIndex,
+						inst.Target.transform.position);
+
+					// AngleLimit + Space（全 Joint を描画）
+					for (int j = 0; j < spring.Joints.Count - 1; j++)
+					{
+						var head = spring.Joints[j]?.transform;
+						var tail = spring.Joints[j + 1]?.transform;
+						if (head == null || tail == null) continue;
+						SpringBoneGizmoDrawer.DrawAngleLimitAndSpace(
+							spring.Joints[j], head, tail);
+					}
+					break;
 				}
-				break;
 			}
 		}
 
@@ -203,14 +207,12 @@ namespace colloid.VRM10Ex
 			var container = root.Q<VisualElement>("DynamicFieldsContainer");
 			if (m_instance.Target != null && m_instance.Spring != null && m_instance.Spring.Joints.Count > 0)
 			{
-				foreach (var instance in m_instances)
-				{
-					m_refreshUI = JointFieldUIGenerator.GenerateUI(
-						container,
-						instance.Spring.Joints,
-						instance,
-						() => { UpdateJointRuntime(); SceneView.RepaintAll(); });
-				}
+				m_refreshUI = JointFieldUIGenerator.GenerateUI(
+					container,
+					m_instance.Spring.Joints,
+					m_instance,
+					() => { UpdateJointRuntime(); SceneView.RepaintAll(); },
+					m_instances.Length > 1 ? m_instances : null);
 			}
 
 			// Center
@@ -285,11 +287,15 @@ namespace colloid.VRM10Ex
 
 			// 0.131+: Runtime.SpringBone.SetJointLevel(transform, blittable)
 			if (s_setJointLevel != null && s_blittableProperty != null
-				&& s_springBoneProperty != null && m_instance.Target != null)
+				&& s_springBoneProperty != null)
 			{
 				var springBone = s_springBoneProperty.GetValue(runtime);
-				var blittable = s_blittableProperty.GetValue(m_instance.Target);
-				s_setJointLevel.Invoke(springBone, new[] { m_instance.Target.transform, blittable });
+				foreach (var inst in m_instances)
+				{
+					if (inst?.Target == null) continue;
+					var blittable = s_blittableProperty.GetValue(inst.Target);
+					s_setJointLevel.Invoke(springBone, new[] { inst.Target.transform, blittable });
+				}
 			}
 			// フォールバック: ReconstructSpringBone（全バージョン）
 			else if (s_reconstructSpringBone != null)

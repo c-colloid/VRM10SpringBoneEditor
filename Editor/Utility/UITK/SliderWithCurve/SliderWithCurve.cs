@@ -14,7 +14,32 @@ public class SliderWithCurve : Slider
 	ToggleButton _toggleButton;
 	[Curve01]
 	CurveField _curve;
-	
+
+	// showMixedValue 自前実装（DOM再構築により基底の実装が壊れるため）
+	bool _showMixedValue;
+
+	public new bool showMixedValue
+	{
+		get => _showMixedValue;
+		set
+		{
+			_showMixedValue = value;
+			// 内蔵テキスト入力の showMixedValue を設定
+			// Unity バージョンにより FloatField または TextField の場合がある
+			var input = this.Q(className: "unity-base-slider__text-field")
+				?? this.Q<FloatField>()
+				?? (VisualElement)this.Q<TextField>();
+			if (input is FloatField ff)
+				ff.showMixedValue = value;
+			else if (input is TextField tf)
+				tf.showMixedValue = value;
+			// dragger thumb を非表示
+			var dragger = this.Q("unity-dragger");
+			if (dragger != null)
+				dragger.style.visibility = value ? Visibility.Hidden : Visibility.Visible;
+		}
+	}
+
 	string _buttonText;
 	public string buttonText {
 		get => _buttonText;
