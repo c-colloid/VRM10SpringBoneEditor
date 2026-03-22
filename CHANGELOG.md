@@ -1,3 +1,11 @@
+[0.2.1] 2026.03.22
+RootBoneからSpringBoneのJointを自動生成する機能を追加
+枝分かれボーンの検出と選択的生成に対応
+Spring識別を名前ベースからJoint参照ベースに変更し、同名Springの誤削除を修正
+Undo時のMissingReferenceExceptionを修正（fake-null対策・Undoグループ化）
+アクティブなSpringBoneExのギズモをフルカラー、非アクティブを半透明で表示するよう変更
+Spring名の自動一意化（重複時に_1, _2...サフィックス付与）
+
 [0.2.0] 2026.03.21
 AngleLimit（Cone/Hinge/Spherical）とSpace座標軸のギズモ表示を追加
 コライダーグループのギズモ表示を追加
