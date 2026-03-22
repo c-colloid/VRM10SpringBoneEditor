@@ -22,16 +22,19 @@ namespace colloid.VRM10Ex.Utility
 
 		/// <summary>
 		/// Spring 全体のギズモを描画（チェーンライン + ワイヤースフィア + コライダー）
+		/// alpha: 1.0=フルカラー（アクティブ）, 0.2=半透明（非アクティブ）
 		/// </summary>
 		public static void DrawSpringGizmos(
 			Vrm10InstanceSpringBone.Spring spring,
-			VRM10SpringBoneJoint target)
+			VRM10SpringBoneJoint target,
+			float alpha = 1.0f)
 		{
-			DrawChainLines(spring);
+			if (alpha >= 1.0f)
+				DrawChainLines(spring);
 
 			// ルート Joint（固定サイズ 0.01f — VRM10SpringBone 公式と同じ）
 			var backup = Gizmos.matrix;
-			Gizmos.color = Color.green;
+			Gizmos.color = new Color(0, 1, 0, alpha);
 			Gizmos.DrawSphere(target.transform.position, 0.01f);
 
 			// 各 Joint のワイヤースフィア（m_jointRadius）
@@ -40,7 +43,8 @@ namespace colloid.VRM10Ex.Utility
 				var currentJoint = spring.Joints[k];
 				var nextJoint = spring.Joints[k + 1];
 				if (currentJoint == null || nextJoint == null) continue;
-				Gizmos.color = (currentJoint == target) ? Color.green : Color.yellow;
+				var c = (currentJoint == target) ? Color.green : Color.yellow;
+				Gizmos.color = new Color(c.r, c.g, c.b, alpha);
 				Gizmos.matrix = Matrix4x4.TRS(
 					nextJoint.transform.position,
 					nextJoint.transform.rotation,
@@ -49,7 +53,8 @@ namespace colloid.VRM10Ex.Utility
 			}
 			Gizmos.matrix = backup;
 
-			DrawColliderGroups(spring.ColliderGroups);
+			if (alpha >= 1.0f)
+				DrawColliderGroups(spring.ColliderGroups);
 		}
 
 		/// <summary>孤立 Joint（Spring に所属しない）の描画</summary>

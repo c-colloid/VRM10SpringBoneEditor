@@ -1,6 +1,11 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
     <ui:TextField picking-mode="Ignore" label="Name" binding-path="m_name" name="SpringName" />
-    <uie:ObjectField label="Target" type="UniVRM10.VRM10SpringBoneJoint, VRM10" binding-path="m_target" name="Target" />
+    <uie:ObjectField label="Root Bone" type="UnityEngine.Transform, UnityEngine.CoreModule" name="RootBone" tooltip="SpringBoneチェーンのルートTransformを指定します。" />
+    <ui:HelpBox message-type="Info" name="SetupMessage" text="ルートボーンを設定してください。" style="display: none;" />
+    <ui:VisualElement name="BranchSelector" style="display: none; margin-top: 4px; margin-bottom: 4px;" />
+    <ui:Button name="GenerateBranchesButton" text="Generate Selected" style="display: none; margin-top: 4px;" />
+    <ui:Button name="RegenerateButton" text="Regenerate Joints" style="display: none; margin-top: 4px;" />
+    <ui:HelpBox message-type="Warning" name="DuplicateWarning" style="display: none;" />
     <ui:ListView header-title="ColliderGroups" show-foldout-header="true" show-add-remove-footer="true" show-border="true" binding-path="m_colliderGroups" virtualization-method="DynamicHeight" reorder-mode="Animated" reorderable="true" name="ColliderGroups" style="margin-top: 5px; margin-right: 5px; margin-bottom: 5px; margin-left: 5px;" />
     <ui:VisualElement name="DynamicFieldsContainer" />
     <uie:ObjectField label="Center" type="UnityEngine.Transform, UnityEngine.CoreModule" name="Center" />
