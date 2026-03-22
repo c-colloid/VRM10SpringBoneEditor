@@ -76,136 +76,282 @@ namespace colloid.VRM10Ex
 
 		void OnUndoRedo()
 		{
+			// Undo/Redo 後に状態を再取得
+			if (m_instance != null) m_instance.Init();
+			Init();
 			m_refreshUI?.Invoke();
 			SceneView.RepaintAll();
+
+			// Targetが破棄されていた場合、Inspector全体を再構築
+			if (m_instance != null && m_instance.Target == null)
+			{
+				EditorApplication.delayCall += () =>
+				{
+					if (m_instance != null)
+						ActiveEditorTracker.sharedTracker.ForceRebuild();
+				};
+			}
 		}
 
 		void OnSceneGUI()
 		{
 			if (m_VRM10Instance == null) return;
 
-			foreach (var inst in m_instances)
+			// アクティブインスタンスのハンドルのみ描画
+			if (m_instance == null || m_instance.Target == null) return;
+			if (VRM10SpringBoneEx.ActiveInstance != null && VRM10SpringBoneEx.ActiveInstance != m_instance) return;
+
+			foreach (var spring in m_VRM10Instance.SpringBone.Springs)
 			{
-				if (inst == null || inst.Target == null) continue;
+				if (!spring.Joints.Contains(m_instance.Target)) continue;
 
-				foreach (var spring in m_VRM10Instance.SpringBone.Springs)
+				int jointIndex = spring.Joints.IndexOf(m_instance.Target);
+
+				// ラベル
+				SpringBoneGizmoDrawer.DrawLabel(
+					spring.Name, m_instance.SpringIndex,
+					m_instance.Target.name, jointIndex,
+					m_instance.Target.transform.position);
+
+				// AngleLimit + Space（全 Joint を描画）
+				for (int j = 0; j < spring.Joints.Count - 1; j++)
 				{
-					if (!spring.Joints.Contains(inst.Target)) continue;
-
-					int jointIndex = spring.Joints.IndexOf(inst.Target);
-
-					// ラベル
-					SpringBoneGizmoDrawer.DrawLabel(
-						spring.Name, inst.SpringIndex,
-						inst.Target.name, jointIndex,
-						inst.Target.transform.position);
-
-					// AngleLimit + Space（全 Joint を描画）
-					for (int j = 0; j < spring.Joints.Count - 1; j++)
-					{
-						var head = spring.Joints[j]?.transform;
-						var tail = spring.Joints[j + 1]?.transform;
-						if (head == null || tail == null) continue;
-						SpringBoneGizmoDrawer.DrawAngleLimitAndSpace(
-							spring.Joints[j], head, tail);
-					}
-					break;
+					var jointJ = spring.Joints[j];
+					var jointJ1 = spring.Joints[j + 1];
+					if (jointJ == null || jointJ1 == null) continue;
+					SpringBoneGizmoDrawer.DrawAngleLimitAndSpace(
+						jointJ, jointJ.transform, jointJ1.transform);
 				}
+				break;
 			}
 		}
 
 		public override VisualElement CreateInspectorGUI()
 		{
 			var root = new VisualElement();
-			if (m_VRMInstance == null || m_spring == null)
+
+			// VRM10Instance存在チェック
+			if (m_VRM10Instance == null)
 			{
 				root.Add(new HelpBox("VRM10 Instance が見つかりません。VRM ヒエラルキー内に配置してください。", HelpBoxMessageType.Error));
 				return root;
 			}
+
 			m_springBoneExUI.CloneTree(root);
+
+			// アクティブインスタンス追跡: クリックでこのEditorをアクティブに
+			root.RegisterCallback<PointerDownEvent>(evt =>
+			{
+				VRM10SpringBoneEx.ActiveInstance = m_instance;
+				SceneView.RepaintAll();
+			});
+			VRM10SpringBoneEx.ActiveInstance = m_instance;
 
 			// --- 静的UI バインディング ---
 
-			// Spring Name
+			// Spring Name（Springが設定されている場合のみバインド）
 			var springName = root.Q<TextField>("SpringName");
-			springName.BindProperty(m_VRMInstance.FindProperty($"{m_spring}.Name"));
-			springName.RegisterValueChangedCallback(evt =>
+			if (m_spring != null)
 			{
-				m_instance.Name = evt.newValue;
-			});
-
-			// Target
-			var targetBone = root.Q<ObjectField>("Target");
-			targetBone.SetEnabled(m_instances.Length < 2);
-			targetBone.RegisterCallback<DragUpdatedEvent>(evt =>
-			{
-				if (DragAndDrop.objectReferences.All(o => o is GameObject))
-					DragAndDrop.visualMode = DragAndDropVisualMode.Generic;
-			});
-			targetBone.RegisterCallback<DragPerformEvent>(evt =>
-			{
-				DragAndDrop.AcceptDrag();
-				var obj = DragAndDrop.objectReferences.FirstOrDefault() as GameObject;
-				if (obj == null) return;
-				if (!obj.TryGetComponent<VRM10SpringBoneJoint>(out var joint))
-					joint = Undo.AddComponent<VRM10SpringBoneJoint>(obj);
-				targetBone.value = joint;
-			});
-			targetBone.RegisterValueChangedCallback(evt =>
-			{
-				if (evt.previousValue != null)
-					(evt.previousValue as VRM10SpringBoneJoint).GetComponentsInChildren<VRM10SpringBoneJoint>().ToList().ForEach(o => DestroyImmediate(o));
-
-				var val = evt.newValue as VRM10SpringBoneJoint;
-				if (val == null)
+				springName.BindProperty(m_VRMInstance.FindProperty($"{m_spring}.Name"));
+				springName.RegisterValueChangedCallback(evt =>
 				{
-					m_VRM10Instance.SpringBone.Springs[m_instance.SpringIndex].Joints.Clear();
+					m_instance.Name = evt.newValue;
+				});
+			}
+			else
+			{
+				springName.SetEnabled(false);
+				springName.SetValueWithoutNotify("(未設定)");
+			}
+
+			// UI要素取得
+			var rootBone = root.Q<ObjectField>("RootBone");
+			var setupMessage = root.Q<HelpBox>("SetupMessage");
+			var branchSelector = root.Q<VisualElement>("BranchSelector");
+			var generateBranchesBtn = root.Q<Button>("GenerateBranchesButton");
+			var regenerateBtn = root.Q<Button>("RegenerateButton");
+			var duplicateWarning = root.Q<HelpBox>("DuplicateWarning");
+			var dynamicFieldsContainer = root.Q<VisualElement>("DynamicFieldsContainer");
+
+			rootBone.SetEnabled(m_instances.Length < 2);
+			rootBone.SetValueWithoutNotify(m_instance.Target?.transform);
+
+			// Spring依存UIの表示/非表示
+			bool hasSpring = m_spring != null;
+			var colliderGroupsList = root.Q<ListView>();
+			var centerField = root.Q<ObjectField>("Center");
+			colliderGroupsList.style.display = hasSpring ? DisplayStyle.Flex : DisplayStyle.None;
+			centerField.style.display = hasSpring ? DisplayStyle.Flex : DisplayStyle.None;
+
+			// UI表示状態の更新ヘルパー
+			void UpdateSetupVisibility()
+			{
+				bool hasTarget = m_instance.Target != null;
+				setupMessage.style.display = hasTarget ? DisplayStyle.None : DisplayStyle.Flex;
+				regenerateBtn.style.display = hasTarget ? DisplayStyle.Flex : DisplayStyle.None;
+				branchSelector.style.display = DisplayStyle.None;
+				generateBranchesBtn.style.display = DisplayStyle.None;
+			}
+			UpdateSetupVisibility();
+
+			// RootBone ValueChanged
+			rootBone.RegisterValueChangedCallback(evt =>
+			{
+				var newTransform = evt.newValue as Transform;
+				if (newTransform == null)
+				{
+					// クリア
+					if (m_instance.SpringIndex >= 0 && m_instance.Spring?.Joints != null)
+						m_VRM10Instance.SpringBone.Springs[m_instance.SpringIndex].Joints.Clear();
+					setupMessage.style.display = DisplayStyle.Flex;
+					regenerateBtn.style.display = DisplayStyle.None;
+					branchSelector.style.display = DisplayStyle.None;
+					generateBranchesBtn.style.display = DisplayStyle.None;
+					RebuildDynamicFields(dynamicFieldsContainer);
 					return;
 				}
-				if (val.GetComponentsInChildren<Transform>().Any(o => !o.TryGetComponent<VRM10SpringBoneJoint>(out var result)))
-					val.GetComponentsInChildren<Transform>().Where(o => !o.TryGetComponent<VRM10SpringBoneJoint>(out var result)).ToList()
-					.ForEach(o => o.gameObject.AddComponent<VRM10SpringBoneJoint>());
 
-				List<VRM10SpringBoneJoint> joints =
-					val.GetComponentsInChildren<VRM10SpringBoneJoint>().ToList();
-				m_VRM10Instance.SpringBone.Springs[m_instance.SpringIndex].Joints = joints;
+				// 重複チェック
+				CheckDuplicateSpring(newTransform, duplicateWarning);
+
+				// 枝分かれ検出
+				var branches = VRM10SpringBoneEx.DetectBranches(newTransform);
+				if (branches.Count > 1)
+				{
+					// 枝分かれあり: 選択UIを表示
+					BuildBranchSelector(branchSelector, branches);
+					branchSelector.style.display = DisplayStyle.Flex;
+					generateBranchesBtn.style.display = DisplayStyle.Flex;
+					setupMessage.style.display = DisplayStyle.None;
+					regenerateBtn.style.display = DisplayStyle.None;
+				}
+				else
+				{
+					// 枝分かれなし: 即座に生成
+					m_instance.GenerateJoints(newTransform);
+					EditorUtility.SetDirty(m_instance);
+					EditorUtility.SetDirty(m_VRM10Instance);
+					Init();
+					// Inspector全体を再構築（Spring依存UIのバインディングを更新）
+					ActiveEditorTracker.sharedTracker.ForceRebuild();
+				}
 			});
 
-			// ColliderGroups ListView
-			var colliderGroupsList = root.Q<ListView>();
-			colliderGroupsList.BindProperty(m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups"));
-			colliderGroupsList.makeItem = () =>
+			// Generate Selected（枝分かれ生成）
+			generateBranchesBtn.clicked += () =>
 			{
-				var ve = m_springBoneExColliderGroupsList.CloneTree();
-				ve.Q<ObjectField>().RegisterValueChangedCallback(evt =>
-				{
-					if (evt.newValue == null)
-					{
-						ve.Q<TextField>().Unbind();
-						ve.Q<ListView>().Unbind();
-						ve.Q<ListView>().makeItem = () => new ObjectField() { objectType = typeof(VRM10SpringBoneCollider) };
-						return;
-					}
-					ve.Q<TextField>().BindProperty(GetOrCreateSerializedObject(evt.newValue).FindProperty("Name"));
-					var list = ve.Q<ListView>();
-					list.BindProperty(GetOrCreateSerializedObject(evt.newValue).FindProperty("Colliders"));
-				});
-				return ve;
-			};
-			colliderGroupsList.bindItem = (ve, i) =>
-			{
-				ve.Q<ObjectField>().BindProperty(m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups.Array.data[{i}]"));
-				if (ve.Q<ObjectField>().value == null) return;
-				var colliderGroupObj = m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups.Array.data[{i}]").objectReferenceValue;
-				ve.Q<TextField>().BindProperty(GetOrCreateSerializedObject(colliderGroupObj).FindProperty("Name"));
-				var list = ve.Q<ListView>();
-				list.BindProperty(GetOrCreateSerializedObject(colliderGroupObj).FindProperty("Colliders"));
-			};
-			colliderGroupsList.itemsAdded += (o) => { };
+				var selectedBranches = GetSelectedBranches(branchSelector);
+				if (selectedBranches.Count == 0) return;
 
-			// --- 動的UI生成 ---
-			var container = root.Q<VisualElement>("DynamicFieldsContainer");
-			if (m_instance.Target != null && m_instance.Spring != null && m_instance.Spring.Joints.Count > 0)
+				Undo.IncrementCurrentGroup();
+				int undoGroup = Undo.GetCurrentGroup();
+
+				bool first = true;
+				foreach (var branch in selectedBranches)
+				{
+					if (first)
+					{
+						// 最初のブランチは現在のSpringBoneExを使用
+						// springName指定で新規Spring作成（ブランチ名で一意化）
+						m_instance.GenerateJoints(branch, branch.name);
+						first = false;
+					}
+					else
+					{
+						// 追加ブランチは同じGameObjectにSpringBoneExを追加
+						// GenerateJoints内で新規Spring作成 → Init()のauto-discoveryは影響しない
+						var newEx = Undo.AddComponent<VRM10SpringBoneEx>(m_instance.gameObject);
+						newEx.GenerateJoints(branch, branch.name);
+					}
+				}
+
+				Undo.CollapseUndoOperations(undoGroup);
+
+				EditorUtility.SetDirty(m_instance);
+				EditorUtility.SetDirty(m_VRM10Instance);
+
+				Init();
+				// Inspector全体を再構築
+				ActiveEditorTracker.sharedTracker.ForceRebuild();
+			};
+
+			// Regenerate Joints（再生成）
+			regenerateBtn.clicked += () =>
+			{
+				var currentRoot = m_instance.Target?.transform;
+				if (currentRoot == null) return;
+
+				// springNameなし → 既存Springを再利用
+				m_instance.GenerateJoints(currentRoot);
+				EditorUtility.SetDirty(m_instance);
+				EditorUtility.SetDirty(m_VRM10Instance);
+				Init();
+				RebuildDynamicFields(dynamicFieldsContainer);
+			};
+
+			// --- Spring依存UIのバインディング（Springが設定されている場合のみ）---
+			if (hasSpring)
+			{
+				// ColliderGroups ListView
+				colliderGroupsList.BindProperty(m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups"));
+				colliderGroupsList.makeItem = () =>
+				{
+					var ve = m_springBoneExColliderGroupsList.CloneTree();
+					ve.Q<ObjectField>().RegisterValueChangedCallback(evt =>
+					{
+						if (evt.newValue == null)
+						{
+							ve.Q<TextField>().Unbind();
+							ve.Q<ListView>().Unbind();
+							ve.Q<ListView>().makeItem = () => new ObjectField() { objectType = typeof(VRM10SpringBoneCollider) };
+							return;
+						}
+						ve.Q<TextField>().BindProperty(GetOrCreateSerializedObject(evt.newValue).FindProperty("Name"));
+						var list = ve.Q<ListView>();
+						list.BindProperty(GetOrCreateSerializedObject(evt.newValue).FindProperty("Colliders"));
+					});
+					return ve;
+				};
+				colliderGroupsList.bindItem = (ve, i) =>
+				{
+					ve.Q<ObjectField>().BindProperty(m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups.Array.data[{i}]"));
+					if (ve.Q<ObjectField>().value == null) return;
+					var colliderGroupObj = m_VRMInstance.FindProperty($"{m_spring}.ColliderGroups.Array.data[{i}]").objectReferenceValue;
+					ve.Q<TextField>().BindProperty(GetOrCreateSerializedObject(colliderGroupObj).FindProperty("Name"));
+					var list = ve.Q<ListView>();
+					list.BindProperty(GetOrCreateSerializedObject(colliderGroupObj).FindProperty("Colliders"));
+				};
+				colliderGroupsList.itemsAdded += (o) => { };
+
+				// --- 動的UI生成 ---
+				RebuildDynamicFields(root.Q<VisualElement>("DynamicFieldsContainer"));
+
+				// Center
+				centerField.BindProperty(m_VRMInstance.FindProperty($"{m_spring}.Center"));
+				centerField.RegisterValueChangedCallback(evt =>
+				{
+					foreach (var instance in m_instances)
+					{
+						if (instance.SpringIndex >= 0)
+							m_VRM10Instance.SpringBone.Springs[instance.SpringIndex].Center = evt.newValue as Transform;
+					}
+				});
+			}
+
+			// DefaultInspector
+			var defaultInspector = new Foldout() { text = "DefaultInspector", value = false };
+			defaultInspector.Add(new IMGUIContainer(() => DrawDefaultInspector()));
+			root.Add(defaultInspector);
+
+			return root;
+		}
+
+		void RebuildDynamicFields(VisualElement container)
+		{
+			container.Clear();
+			if (m_instance.Target != null && m_instance.Spring != null
+				&& m_instance.Spring.Joints != null && m_instance.Spring.Joints.Count > 0)
 			{
 				m_refreshUI = JointFieldUIGenerator.GenerateUI(
 					container,
@@ -214,23 +360,60 @@ namespace colloid.VRM10Ex
 					() => { UpdateJointRuntime(); SceneView.RepaintAll(); },
 					m_instances.Length > 1 ? m_instances : null);
 			}
+		}
 
-			// Center
-			root.Q<ObjectField>("Center").BindProperty(m_VRMInstance.FindProperty($"{m_spring}.Center"));
-			root.Q<ObjectField>("Center").RegisterValueChangedCallback(evt =>
+		void BuildBranchSelector(VisualElement container, List<Transform> branches)
+		{
+			container.Clear();
+			var header = new Label("ブランチを選択してください:");
+			header.style.unityFontStyleAndWeight = FontStyle.Bold;
+			header.style.marginBottom = 4;
+			container.Add(header);
+
+			foreach (var branch in branches)
 			{
-				foreach (var instance in m_instances)
+				int chainLength = VRM10SpringBoneEx.CountChainLength(branch);
+				var toggle = new Toggle($"{branch.name} ({chainLength} bones)")
 				{
-					m_VRM10Instance.SpringBone.Springs[instance.SpringIndex].Center = evt.newValue as Transform;
+					value = true,
+					name = branch.name,
+					userData = branch
+				};
+				toggle.style.marginLeft = 8;
+				container.Add(toggle);
+			}
+		}
+
+		List<Transform> GetSelectedBranches(VisualElement container)
+		{
+			var selected = new List<Transform>();
+			foreach (var child in container.Children())
+			{
+				if (child is Toggle toggle && toggle.value && toggle.userData is Transform t)
+					selected.Add(t);
+			}
+			return selected;
+		}
+
+		void CheckDuplicateSpring(Transform rootTransform, HelpBox warningBox)
+		{
+			if (m_VRM10Instance == null || rootTransform == null)
+			{
+				warningBox.style.display = DisplayStyle.None;
+				return;
+			}
+
+			foreach (var spring in m_VRM10Instance.SpringBone.Springs)
+			{
+				if (spring == m_instance.Spring) continue;
+				if (spring.Joints != null && spring.Joints.Any(j => j != null && j.transform == rootTransform))
+				{
+					warningBox.text = $"このボーンは既に別のSpring「{spring.Name}」に登録されています。";
+					warningBox.style.display = DisplayStyle.Flex;
+					return;
 				}
-			});
-
-			// DefaultInspector
-			var defaultInspector = new Foldout() { text = "DefaultInspector", value = false };
-			defaultInspector.Add(new IMGUIContainer(() => DrawDefaultInspector()));
-			root.Add(defaultInspector);
-
-			return root;
+			}
+			warningBox.style.display = DisplayStyle.None;
 		}
 
 		void Init()
