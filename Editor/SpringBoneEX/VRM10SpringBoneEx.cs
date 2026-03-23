@@ -10,6 +10,19 @@ using colloid.VRM10Ex.Utility;
 
 namespace colloid.VRM10Ex
 {
+	/// <summary>
+	/// 枝分かれ時のチェーン生成方式。VRC PhysBone の MultiChildType に相当。
+	/// </summary>
+	public enum MultiChildType
+	{
+		/// <summary>分岐ボーンをスキップ（物理なし、リジッド追従）</summary>
+		Ignore,
+		/// <summary>1番目の子を幹に統合、残りは分岐点から開始</summary>
+		First,
+		/// <summary>分岐点で分割、全枝独立（中立）</summary>
+		Average,
+	}
+
 	[AddComponentMenu("Scripts/UniVRM10/VRM10 Spring Bone Ex")]
 	public class VRM10SpringBoneEx : MonoBehaviour
 	{
@@ -29,6 +42,10 @@ namespace colloid.VRM10Ex
 		[SerializeField]
 		Transform m_targetTransform;
 
+		// チェーン末尾のJoint（チェーン固有のため、共有ルートを持つ枝分かれでもSpringを一意に特定できる）
+		[SerializeField]
+		VRM10SpringBoneJoint m_tailJoint;
+
 		[SerializeField]
 		Vrm10InstanceSpringBone.Spring m_spring;
 		public Vrm10InstanceSpringBone.Spring Spring => m_spring;
@@ -44,6 +61,13 @@ namespace colloid.VRM10Ex
 
 		[SerializeField]
 		List<VRM10SpringBoneColliderGroup> m_colliderGroups = new List<VRM10SpringBoneColliderGroup>();
+
+		[SerializeField]
+		MultiChildType m_multiChildType = MultiChildType.Ignore;
+		public MultiChildType MultiChild {
+			get => m_multiChildType;
+			set => m_multiChildType = value;
+		}
 
 		// カーブが有効なフィールド名を動的管理
 		[SerializeField]
@@ -98,7 +122,8 @@ namespace colloid.VRM10Ex
 
 		/// <summary>
 		/// VRM10Instance上のSpringリストから、このコンポーネントに対応するSpringを解決する。
-		/// Target Joint参照を主キーとし、名前ベースのフォールバックは行わない。
+		/// 末尾Joint → 先頭Joint → Transform の優先順位で解決する。
+		/// 共有ルートを持つ枝分かれでも、末尾Jointはチェーン固有のため正しく特定できる。
 		/// </summary>
 		void InitJointIndex()
 		{
@@ -106,33 +131,50 @@ namespace colloid.VRM10Ex
 			if (targetVRM == null) return;
 			m_vrm10 = targetVRM;
 
-			m_spring = null;
+			Vrm10InstanceSpringBone.Spring resolved = null;
 
-			// 1. Target Joint参照でSpringを解決（最も信頼性が高い）
-			if (m_target != null)
+			// 1. 末尾Joint参照でSpringを解決（最も信頼性が高い - チェーン固有）
+			if (m_tailJoint != null)
 			{
-				m_spring = targetVRM.SpringBone.Springs.Find(o =>
+				resolved = targetVRM.SpringBone.Springs.Find(o =>
+					o.Joints.Count > 0 && o.Joints[o.Joints.Count - 1] == m_tailJoint);
+			}
+
+			// 2. 先頭Joint参照でSpringを解決（旧データ互換・枝分かれなしの場合）
+			if (resolved == null && m_target != null)
+			{
+				resolved = targetVRM.SpringBone.Springs.Find(o =>
 					o.Joints.Count > 0 && o.Joints[0] == m_target);
 			}
 
-			// 2. Target TransformでJointを復元して解決
+			// 3. Target TransformでJointを復元して解決
 			//    （Undo後にm_targetが破棄されていてもTransformは残る場合）
-			if (m_spring == null && m_targetTransform != null)
+			if (resolved == null && m_targetTransform != null)
 			{
 				if (m_targetTransform.TryGetComponent<VRM10SpringBoneJoint>(out var joint))
 				{
 					m_target = joint;
-					m_spring = targetVRM.SpringBone.Springs.Find(o =>
+					resolved = targetVRM.SpringBone.Springs.Find(o =>
 						o.Joints.Count > 0 && o.Joints[0] == joint);
 				}
 			}
 
-			m_springIndex = m_spring != null
-				? targetVRM.SpringBone.Springs.IndexOf(m_spring)
+			m_spring = resolved;
+			m_springIndex = resolved != null
+				? targetVRM.SpringBone.Springs.IndexOf(resolved)
 				: -1;
 
-			if (m_spring != null)
-				m_name = m_spring.Name;
+			if (resolved != null)
+			{
+				m_name = resolved.Name;
+				// m_target/m_tailJointを最新のSpring内容で同期
+				if (resolved.Joints.Count > 0 && resolved.Joints[0] != null)
+				{
+					m_target = resolved.Joints[0];
+					m_targetTransform = m_target.transform;
+				}
+				m_tailJoint = resolved.Joints[resolved.Joints.Count - 1];
+			}
 		}
 
 		public void DestroyImmediate()
@@ -144,16 +186,14 @@ namespace colloid.VRM10Ex
 		private void OnDrawGizmosSelected()
 		{
 			if (m_target == null) return;
-			var vrm = GetComponentInParent<Vrm10Instance>();
-			if (vrm == null) return;
 
 			bool isActive = (ActiveInstance == null || ActiveInstance == this);
 			float alpha = isActive ? 1.0f : 0.2f;
 
-			foreach (var spring in vrm.SpringBone.Springs)
+			// m_spring を直接使用（共有ルートでも正しい Spring を描画）
+			if (m_spring != null && m_spring.Joints.Count > 0)
 			{
-				if (!spring.Joints.Contains(m_target)) continue;
-				SpringBoneGizmoDrawer.DrawSpringGizmos(spring, m_target, alpha);
+				SpringBoneGizmoDrawer.DrawSpringGizmos(m_spring, m_target, alpha);
 				return;
 			}
 
@@ -162,13 +202,25 @@ namespace colloid.VRM10Ex
 		}
 
 		/// <summary>
-		/// 指定したrootTransformを起点にJointを生成しSpringに登録する。
-		/// springNameを指定すると常に新規Springを作成する（枝分かれ生成用）。
-		/// springNameを省略すると既存Springを再利用し、無ければ新規作成する。
+		/// 指定したrootTransformを起点にJointを生成しSpringに登録する（線形チェーン用）。
+		/// 内部でCollectChainsを呼び、最初のチェーンを使用する。
 		/// </summary>
 		public void GenerateJoints(Transform root = null, string springName = null)
 		{
 			if (root == null) root = this.transform;
+			var chains = CollectChains(root, m_multiChildType);
+			if (chains.Count == 0) return;
+			GenerateJoints(chains[0], springName);
+		}
+
+		/// <summary>
+		/// 指定したチェーン（Transform列）にJointを生成しSpringに登録する。
+		/// springNameを指定すると常に新規Springを作成する（枝分かれ生成用）。
+		/// springNameを省略すると既存Springを再利用し、無ければ新規作成する。
+		/// </summary>
+		public void GenerateJoints(List<Transform> chain, string springName = null)
+		{
+			if (chain == null || chain.Count == 0) return;
 
 			var vrm = GetComponentInParent<Vrm10Instance>();
 			if (vrm == null) return;
@@ -193,7 +245,7 @@ namespace colloid.VRM10Ex
 			else if (m_spring == null || !vrm.SpringBone.Springs.Contains(m_spring))
 			{
 				// Springなし or VRM10Instanceに存在しない: 新規作成
-				var name = !string.IsNullOrEmpty(m_name) ? m_name : root.name;
+				var name = !string.IsNullOrEmpty(m_name) ? m_name : chain[0].name;
 				name = EnsureUniqueSpringName(name, vrm);
 				m_spring = new Vrm10InstanceSpringBone.Spring(name);
 				vrm.SpringBone.Springs.Add(m_spring);
@@ -202,15 +254,33 @@ namespace colloid.VRM10Ex
 			// else: 既存Springを再利用（Regenerate時）
 
 			// --- Joint生成 ---
-			if (!root.TryGetComponent<VRM10SpringBoneJoint>(out var rootJoint))
-				rootJoint = Undo.AddComponent<VRM10SpringBoneJoint>(root.gameObject);
+			var joints = new List<VRM10SpringBoneJoint>();
+			VRM10SpringBoneJoint prevJoint = null;
 
-			m_target = rootJoint;
-			m_targetTransform = root;
+			foreach (var t in chain)
+			{
+				bool isNew = false;
+				if (!t.TryGetComponent<VRM10SpringBoneJoint>(out var joint))
+				{
+					joint = Undo.AddComponent<VRM10SpringBoneJoint>(t.gameObject);
+					isNew = true;
+				}
 
-			// 子階層にJoint生成（最初の子のみ再帰）
-			var joints = new List<VRM10SpringBoneJoint> { rootJoint };
-			GenerateJointsRecursiveUndo(rootJoint, joints);
+				// 新規Jointのみ親のフィールドをコピー
+				if (isNew && prevJoint != null)
+				{
+					var fields = typeof(VRM10SpringBoneJoint).GetFields(BindingFlags.Public | BindingFlags.Instance);
+					foreach (var f in fields)
+						f.SetValue(joint, f.GetValue(prevJoint));
+				}
+
+				joints.Add(joint);
+				prevJoint = joint;
+			}
+
+			m_target = joints[0];
+			m_targetTransform = chain[0];
+			m_tailJoint = joints[joints.Count - 1];
 
 			// Joints更新（null安全）
 			SetSpringJoints(m_spring, joints);
@@ -221,48 +291,190 @@ namespace colloid.VRM10Ex
 		}
 
 		/// <summary>
-		/// 枝分かれを検出して子Transformリストを返す。
-		/// childCount > 1 なら枝分かれあり。
+		/// rootから全てのリーフまでの線形チェーンを再帰的に収集する。
+		/// 枝分かれがある場合、分岐点を共有しつつ各リーフまでの完全なパスを返す。
 		/// </summary>
-		public static List<Transform> DetectBranches(Transform root)
+		public static List<List<Transform>> CollectChains(Transform root)
 		{
-			var branches = new List<Transform>();
-			if (root == null) return branches;
-			for (int i = 0; i < root.childCount; i++)
-				branches.Add(root.GetChild(i));
-			return branches;
+			var chains = new List<List<Transform>>();
+			if (root == null) return chains;
+			CollectChainsRecursive(root, new List<Transform>(), chains);
+			return chains;
+		}
+
+		static void CollectChainsRecursive(Transform current, List<Transform> prefix, List<List<Transform>> chains)
+		{
+			prefix.Add(current);
+
+			if (current.childCount == 0)
+			{
+				// リーフ: チェーンを確定
+				chains.Add(new List<Transform>(prefix));
+			}
+			else if (current.childCount == 1)
+			{
+				// 単一の子: チェーンを継続
+				CollectChainsRecursive(current.GetChild(0), prefix, chains);
+			}
+			else
+			{
+				// 枝分かれ: 各子で分岐（prefixをコピーして渡す）
+				for (int i = 0; i < current.childCount; i++)
+					CollectChainsRecursive(current.GetChild(i), new List<Transform>(prefix), chains);
+			}
 		}
 
 		/// <summary>
-		/// 指定Transformから最初の子のみを辿ったチェーンの長さを返す。
+		/// MultiChildType に応じたチェーン収集を行う。
 		/// </summary>
-		public static int CountChainLength(Transform root)
+		public static List<List<Transform>> CollectChains(Transform root, MultiChildType mode)
 		{
-			int count = 0;
-			var current = root;
-			while (current != null)
+			if (root == null) return new List<List<Transform>>();
+			switch (mode)
 			{
-				count++;
-				current = current.childCount > 0 ? current.GetChild(0) : null;
+				case MultiChildType.Ignore:  return CollectChainsIgnore(root);
+				case MultiChildType.First:   return CollectChainsFirst(root);
+				case MultiChildType.Average: return CollectChainsAverage(root);
+				default:                     return CollectChains(root);
 			}
-			return count;
 		}
 
-		static void GenerateJointsRecursiveUndo(VRM10SpringBoneJoint parent, List<VRM10SpringBoneJoint> joints)
+		// ────────────────────────────────────────
+		// Ignore: 分岐ボーンを物理チェーンからスキップ
+		// ────────────────────────────────────────
+
+		/// <summary>
+		/// Ignore モード: 分岐点（childCount>1）は物理から除外する。
+		/// 分岐点の手前までが幹チェーン、各子は分岐点をアンカー(joints[0])として開始する。
+		/// </summary>
+		static List<List<Transform>> CollectChainsIgnore(Transform root)
 		{
-			if (parent.transform.childCount == 0) return;
+			var chains = new List<List<Transform>>();
+			var trunk = new List<Transform>();
+			CollectChainsIgnoreRecursive(root, trunk, chains);
+			return chains;
+		}
 
-			var child = parent.transform.GetChild(0);
-			if (!child.TryGetComponent<VRM10SpringBoneJoint>(out var joint))
-				joint = Undo.AddComponent<VRM10SpringBoneJoint>(child.gameObject);
+		static void CollectChainsIgnoreRecursive(Transform current, List<Transform> trunk, List<List<Transform>> chains)
+		{
+			trunk.Add(current);
 
-			// 親のフィールドをコピー
-			var fields = typeof(VRM10SpringBoneJoint).GetFields(BindingFlags.Public | BindingFlags.Instance);
-			foreach (var f in fields)
-				f.SetValue(joint, f.GetValue(parent));
+			if (current.childCount == 0)
+			{
+				// リーフ: 幹チェーンを確定
+				if (trunk.Count >= 2)
+					chains.Add(new List<Transform>(trunk));
+			}
+			else if (current.childCount == 1)
+			{
+				// 単一の子: 幹を継続
+				CollectChainsIgnoreRecursive(current.GetChild(0), trunk, chains);
+			}
+			else
+			{
+				// 分岐点: current を幹から除外し、幹を確定
+				// current は物理なし（どのSpringにも含まれない）
+				trunk.RemoveAt(trunk.Count - 1);
+				if (trunk.Count >= 2)
+					chains.Add(new List<Transform>(trunk));
 
-			joints.Add(joint);
-			GenerateJointsRecursiveUndo(joint, joints);
+				// 各子を独立チェーンとして開始（current は含めない — Transform共有禁止）
+				for (int i = 0; i < current.childCount; i++)
+				{
+					var branch = new List<Transform>();
+					CollectChainsIgnoreRecursive(current.GetChild(i), branch, chains);
+				}
+			}
+		}
+
+		// ────────────────────────────────────────
+		// First: 1番目の子を幹に統合
+		// ────────────────────────────────────────
+
+		/// <summary>
+		/// First モード: 各分岐点でGetChild(0)を辿った最長パスがメインチェーン。
+		/// 2番目以降の子は分岐点をアンカーとして個別チェーンを開始する。
+		/// </summary>
+		static List<List<Transform>> CollectChainsFirst(Transform root)
+		{
+			var chains = new List<List<Transform>>();
+			CollectChainsFirstRecursive(root, new List<Transform>(), chains);
+			return chains;
+		}
+
+		static void CollectChainsFirstRecursive(Transform current, List<Transform> chain, List<List<Transform>> chains)
+		{
+			chain.Add(current);
+
+			if (current.childCount == 0)
+			{
+				// リーフ: チェーンを確定
+				if (chain.Count >= 2)
+					chains.Add(new List<Transform>(chain));
+			}
+			else if (current.childCount == 1)
+			{
+				// 単一の子: 継続
+				CollectChainsFirstRecursive(current.GetChild(0), chain, chains);
+			}
+			else
+			{
+				// 分岐点: 1番目の子はチェーンを継続（current はメインチェーンに含まれる）
+				CollectChainsFirstRecursive(current.GetChild(0), chain, chains);
+
+				// 2番目以降の子は独立チェーンとして開始（current は含めない — Transform共有禁止）
+				for (int i = 1; i < current.childCount; i++)
+				{
+					var branch = new List<Transform>();
+					CollectChainsFirstRecursive(current.GetChild(i), branch, chains);
+				}
+			}
+		}
+
+		// ────────────────────────────────────────
+		// Average: 分岐点で分割、全枝独立
+		// ────────────────────────────────────────
+
+		/// <summary>
+		/// Average モード: 分岐点までの幹セグメント（分岐点を含む）を確定し、
+		/// 各子は分岐点をアンカーとして個別チェーンを開始する。
+		/// </summary>
+		static List<List<Transform>> CollectChainsAverage(Transform root)
+		{
+			var chains = new List<List<Transform>>();
+			CollectChainsAverageRecursive(root, new List<Transform>(), chains);
+			return chains;
+		}
+
+		static void CollectChainsAverageRecursive(Transform current, List<Transform> segment, List<List<Transform>> chains)
+		{
+			segment.Add(current);
+
+			if (current.childCount == 0)
+			{
+				// リーフ: セグメントを確定
+				if (segment.Count >= 2)
+					chains.Add(new List<Transform>(segment));
+			}
+			else if (current.childCount == 1)
+			{
+				// 単一の子: 継続
+				CollectChainsAverageRecursive(current.GetChild(0), segment, chains);
+			}
+			else
+			{
+				// 分岐点: ここまでの幹セグメント（分岐点を含む）を確定
+				// 分岐点は幹Springに含まれ、中立的な物理が適用される
+				if (segment.Count >= 2)
+					chains.Add(new List<Transform>(segment));
+
+				// 各子は独立チェーンとして開始（current は含めない — Transform共有禁止）
+				for (int i = 0; i < current.childCount; i++)
+				{
+					var branch = new List<Transform>();
+					CollectChainsAverageRecursive(current.GetChild(i), branch, chains);
+				}
+			}
 		}
 
 		/// <summary>
