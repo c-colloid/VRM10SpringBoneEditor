@@ -1,7 +1,9 @@
-[0.2.1] 2026.03.22
+[0.2.1] 2026.03.23
 RootBoneからSpringBoneのJointを自動生成する機能を追加
-枝分かれボーンの検出と選択的生成に対応
-Spring識別を名前ベースからJoint参照ベースに変更し、同名Springの誤削除を修正
+MultiChildType（Ignore/First/Average）による枝分かれ処理モードを追加
+枝分かれボーンの検出と選択的生成に対応（チェーンプレビュー付き）
+Spring識別を末尾Jointベースに変更し、共有ルートを持つ枝分かれでも正しく特定
+UniVRM 0.131の実装制約に対応（同一Transformが複数SpringのJointに含まれるとランタイムエラーになる問題を回避）
 Undo時のMissingReferenceExceptionを修正（fake-null対策・Undoグループ化）
 アクティブなSpringBoneExのギズモをフルカラー、非アクティブを半透明で表示するよう変更
 Spring名の自動一意化（重複時に_1, _2...サフィックス付与）
