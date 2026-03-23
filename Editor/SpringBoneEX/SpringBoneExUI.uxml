@@ -1,6 +1,7 @@
 <ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" editor-extension-mode="True">
     <ui:TextField picking-mode="Ignore" label="Name" binding-path="m_name" name="SpringName" />
     <uie:ObjectField label="Root Bone" type="UnityEngine.Transform, UnityEngine.CoreModule" name="RootBone" tooltip="SpringBoneチェーンのルートTransformを指定します。" />
+    <ui:EnumField label="Multi Child Type" name="MultiChildType" style="display: none;" />
     <ui:HelpBox message-type="Info" name="SetupMessage" text="ルートボーンを設定してください。" style="display: none;" />
     <ui:VisualElement name="BranchSelector" style="display: none; margin-top: 4px; margin-bottom: 4px;" />
     <ui:Button name="GenerateBranchesButton" text="Generate Selected" style="display: none; margin-top: 4px;" />
