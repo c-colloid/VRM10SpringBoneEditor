@@ -101,28 +101,24 @@ namespace colloid.VRM10Ex
 			if (m_instance == null || m_instance.Target == null) return;
 			if (VRM10SpringBoneEx.ActiveInstance != null && VRM10SpringBoneEx.ActiveInstance != m_instance) return;
 
-			foreach (var spring in m_VRM10Instance.SpringBone.Springs)
+			// m_instance.Spring を直接使用（共有ルートでも正しい Spring を描画）
+			var spring = m_instance.Spring;
+			if (spring == null || spring.Joints == null || spring.Joints.Count == 0) return;
+
+			// ラベル
+			SpringBoneGizmoDrawer.DrawLabel(
+				spring.Name, m_instance.SpringIndex,
+				m_instance.Target.name, 0,
+				m_instance.Target.transform.position);
+
+			// AngleLimit + Space（全 Joint を描画）
+			for (int j = 0; j < spring.Joints.Count - 1; j++)
 			{
-				if (!spring.Joints.Contains(m_instance.Target)) continue;
-
-				int jointIndex = spring.Joints.IndexOf(m_instance.Target);
-
-				// ラベル
-				SpringBoneGizmoDrawer.DrawLabel(
-					spring.Name, m_instance.SpringIndex,
-					m_instance.Target.name, jointIndex,
-					m_instance.Target.transform.position);
-
-				// AngleLimit + Space（全 Joint を描画）
-				for (int j = 0; j < spring.Joints.Count - 1; j++)
-				{
-					var jointJ = spring.Joints[j];
-					var jointJ1 = spring.Joints[j + 1];
-					if (jointJ == null || jointJ1 == null) continue;
-					SpringBoneGizmoDrawer.DrawAngleLimitAndSpace(
-						jointJ, jointJ.transform, jointJ1.transform);
-				}
-				break;
+				var jointJ = spring.Joints[j];
+				var jointJ1 = spring.Joints[j + 1];
+				if (jointJ == null || jointJ1 == null) continue;
+				SpringBoneGizmoDrawer.DrawAngleLimitAndSpace(
+					jointJ, jointJ.transform, jointJ1.transform);
 			}
 		}
 
@@ -167,6 +163,7 @@ namespace colloid.VRM10Ex
 
 			// UI要素取得
 			var rootBone = root.Q<ObjectField>("RootBone");
+			var multiChildField = root.Q<EnumField>("MultiChildType");
 			var setupMessage = root.Q<HelpBox>("SetupMessage");
 			var branchSelector = root.Q<VisualElement>("BranchSelector");
 			var generateBranchesBtn = root.Q<Button>("GenerateBranchesButton");
@@ -176,6 +173,10 @@ namespace colloid.VRM10Ex
 
 			rootBone.SetEnabled(m_instances.Length < 2);
 			rootBone.SetValueWithoutNotify(m_instance.Target?.transform);
+
+			// MultiChildType EnumField 初期化
+			multiChildField.Init(m_instance.MultiChild);
+			multiChildField.style.display = DisplayStyle.None; // 分岐検出時のみ表示
 
 			// Spring依存UIの表示/非表示
 			bool hasSpring = m_spring != null;
@@ -192,8 +193,46 @@ namespace colloid.VRM10Ex
 				regenerateBtn.style.display = hasTarget ? DisplayStyle.Flex : DisplayStyle.None;
 				branchSelector.style.display = DisplayStyle.None;
 				generateBranchesBtn.style.display = DisplayStyle.None;
+				multiChildField.style.display = DisplayStyle.None;
 			}
 			UpdateSetupVisibility();
+
+			// チェーン収集＋BranchSelector更新のヘルパー
+			void UpdateBranchUI(Transform targetRoot)
+			{
+				if (targetRoot == null) return;
+				var chains = VRM10SpringBoneEx.CollectChains(targetRoot, m_instance.MultiChild);
+				if (chains.Count > 1)
+				{
+					BuildBranchSelector(branchSelector, chains);
+					multiChildField.style.display = DisplayStyle.Flex;
+					branchSelector.style.display = DisplayStyle.Flex;
+					generateBranchesBtn.style.display = DisplayStyle.Flex;
+					setupMessage.style.display = DisplayStyle.None;
+					regenerateBtn.style.display = DisplayStyle.None;
+				}
+				else if (chains.Count == 1)
+				{
+					// モードによって1チェーンになる場合（枝分かれはあるがIgnoreで1チェーンなど）
+					multiChildField.style.display = DisplayStyle.Flex;
+					branchSelector.style.display = DisplayStyle.None;
+					generateBranchesBtn.style.display = DisplayStyle.Flex;
+					setupMessage.style.display = DisplayStyle.None;
+					regenerateBtn.style.display = DisplayStyle.None;
+				}
+			}
+
+			// MultiChildType ValueChanged
+			multiChildField.RegisterValueChangedCallback(evt =>
+			{
+				Undo.RecordObject(m_instance, "Change Multi Child Type");
+				m_instance.MultiChild = (MultiChildType)evt.newValue;
+				EditorUtility.SetDirty(m_instance);
+
+				var currentRoot = rootBone.value as Transform;
+				if (currentRoot != null)
+					UpdateBranchUI(currentRoot);
+			});
 
 			// RootBone ValueChanged
 			rootBone.RegisterValueChangedCallback(evt =>
@@ -208,6 +247,7 @@ namespace colloid.VRM10Ex
 					regenerateBtn.style.display = DisplayStyle.None;
 					branchSelector.style.display = DisplayStyle.None;
 					generateBranchesBtn.style.display = DisplayStyle.None;
+					multiChildField.style.display = DisplayStyle.None;
 					RebuildDynamicFields(dynamicFieldsContainer);
 					return;
 				}
@@ -215,25 +255,21 @@ namespace colloid.VRM10Ex
 				// 重複チェック
 				CheckDuplicateSpring(newTransform, duplicateWarning);
 
-				// 枝分かれ検出
-				var branches = VRM10SpringBoneEx.DetectBranches(newTransform);
-				if (branches.Count > 1)
+				// 枝分かれの有無を確認（フルパスで判定）
+				var fullChains = VRM10SpringBoneEx.CollectChains(newTransform);
+				if (fullChains.Count > 1)
 				{
-					// 枝分かれあり: 選択UIを表示
-					BuildBranchSelector(branchSelector, branches);
-					branchSelector.style.display = DisplayStyle.Flex;
-					generateBranchesBtn.style.display = DisplayStyle.Flex;
-					setupMessage.style.display = DisplayStyle.None;
-					regenerateBtn.style.display = DisplayStyle.None;
+					// 枝分かれあり: MultiChildType + BranchSelector を表示
+					UpdateBranchUI(newTransform);
 				}
 				else
 				{
 					// 枝分かれなし: 即座に生成
+					multiChildField.style.display = DisplayStyle.None;
 					m_instance.GenerateJoints(newTransform);
 					EditorUtility.SetDirty(m_instance);
 					EditorUtility.SetDirty(m_VRM10Instance);
 					Init();
-					// Inspector全体を再構築（Spring依存UIのバインディングを更新）
 					ActiveEditorTracker.sharedTracker.ForceRebuild();
 				}
 			});
@@ -241,28 +277,43 @@ namespace colloid.VRM10Ex
 			// Generate Selected（枝分かれ生成）
 			generateBranchesBtn.clicked += () =>
 			{
-				var selectedBranches = GetSelectedBranches(branchSelector);
-				if (selectedBranches.Count == 0) return;
+				var selectedChains = GetSelectedChains(branchSelector);
+				if (selectedChains.Count == 0) return;
+
+				// 共通プレフィックス長を計算（Spring名の分岐点特定用）
+				int commonLen = 0;
+				if (selectedChains.Count > 1)
+				{
+					int minLen = selectedChains.Min(c => c.Count);
+					for (int i = 0; i < minLen; i++)
+					{
+						if (selectedChains.All(c => c[i] == selectedChains[0][i]))
+							commonLen = i + 1;
+						else break;
+					}
+				}
 
 				Undo.IncrementCurrentGroup();
 				int undoGroup = Undo.GetCurrentGroup();
 
 				bool first = true;
-				foreach (var branch in selectedBranches)
+				foreach (var chain in selectedChains)
 				{
+					// 共通部分以降の最初のTransform名をSpring名に使用
+					int nameIdx = Math.Min(commonLen, chain.Count - 1);
+					var chainName = chain[nameIdx].name;
+
 					if (first)
 					{
-						// 最初のブランチは現在のSpringBoneExを使用
-						// springName指定で新規Spring作成（ブランチ名で一意化）
-						m_instance.GenerateJoints(branch, branch.name);
+						// 最初のチェーンは現在のSpringBoneExを使用
+						m_instance.GenerateJoints(chain, chainName);
 						first = false;
 					}
 					else
 					{
-						// 追加ブランチは同じGameObjectにSpringBoneExを追加
-						// GenerateJoints内で新規Spring作成 → Init()のauto-discoveryは影響しない
+						// 追加チェーンは同じGameObjectにSpringBoneExを追加
 						var newEx = Undo.AddComponent<VRM10SpringBoneEx>(m_instance.gameObject);
-						newEx.GenerateJoints(branch, branch.name);
+						newEx.GenerateJoints(chain, chainName);
 					}
 				}
 
@@ -362,35 +413,55 @@ namespace colloid.VRM10Ex
 			}
 		}
 
-		void BuildBranchSelector(VisualElement container, List<Transform> branches)
+		void BuildBranchSelector(VisualElement container, List<List<Transform>> chains)
 		{
 			container.Clear();
-			var header = new Label("ブランチを選択してください:");
+			var header = new Label("チェーンを選択してください:");
 			header.style.unityFontStyleAndWeight = FontStyle.Bold;
 			header.style.marginBottom = 4;
 			container.Add(header);
 
-			foreach (var branch in branches)
+			// 共通プレフィックスの長さを計算（表示の簡略化用）
+			int commonPrefix = 0;
+			if (chains.Count > 1)
 			{
-				int chainLength = VRM10SpringBoneEx.CountChainLength(branch);
-				var toggle = new Toggle($"{branch.name} ({chainLength} bones)")
+				int minLen = chains.Min(c => c.Count);
+				for (int i = 0; i < minLen; i++)
+				{
+					if (chains.All(c => c[i] == chains[0][i]))
+						commonPrefix = i + 1;
+					else break;
+				}
+			}
+
+			foreach (var chain in chains)
+			{
+				// 分岐点以降を表示
+				var displayParts = chain.Skip(commonPrefix).Select(t => t.name).ToArray();
+				string label;
+				if (displayParts.Length <= 3)
+					label = string.Join(" → ", displayParts);
+				else
+					label = $"{displayParts[0]} → ... → {displayParts[displayParts.Length - 1]}";
+				label += $" ({chain.Count} bones)";
+
+				var toggle = new Toggle(label)
 				{
 					value = true,
-					name = branch.name,
-					userData = branch
+					userData = chain
 				};
 				toggle.style.marginLeft = 8;
 				container.Add(toggle);
 			}
 		}
 
-		List<Transform> GetSelectedBranches(VisualElement container)
+		List<List<Transform>> GetSelectedChains(VisualElement container)
 		{
-			var selected = new List<Transform>();
+			var selected = new List<List<Transform>>();
 			foreach (var child in container.Children())
 			{
-				if (child is Toggle toggle && toggle.value && toggle.userData is Transform t)
-					selected.Add(t);
+				if (child is Toggle toggle && toggle.value && toggle.userData is List<Transform> chain)
+					selected.Add(chain);
 			}
 			return selected;
 		}
